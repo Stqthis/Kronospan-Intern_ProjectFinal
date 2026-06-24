@@ -373,29 +373,50 @@ def _strip_text_cells(df: "pd.DataFrame") -> "pd.DataFrame":
 
 
 def load_excel(path: str) -> Tuple[list[dict], dict]:
-    """Excel -> ``{'file:sheet': DataFrame}``; Excel contributes nothing to the
-    text index.
-
-    Every sheet is read RAW (``header=None``) and its real header detected, so
-    sheets with different layouts -- a title/blank row on top, a merged two-row
-    header, a blank leading column -- all become clean tables. A sheet whose
-    header is already the first row is unaffected. These DataFrames are queried
-    in full by the analyse tool; they are deliberately not embedded as text.
-    """
+    """Excel -> {'file:sheet': DataFrame}; with debugging."""
     name = os.path.basename(path)
-    raw_sheets = pd.read_excel(path, sheet_name=None, header=None)  # one open, all sheets
+    print(f"\n📄 Loading Excel: {name}")
+    
+    raw_sheets = pd.read_excel(path, sheet_name=None, header=None)
+    print(f"  Sheets found: {list(raw_sheets.keys())}")
+    
     if path.lower().endswith((".xlsx", ".xlsm")):
-        _fill_merged_headers(path, raw_sheets)  # exact multi-row headers
+        _fill_merged_headers(path, raw_sheets)
+    
     dataframes: dict[str, pd.DataFrame] = {}
+    
     for sheet, raw in raw_sheets.items():
+        print(f"\n  Sheet: {sheet}")
+        print(f"    Raw shape: {raw.shape}")
+        
         regions = _split_regions(raw)
+        print(f"    Regions found: {len(regions)}")
+        
         for ri, region in enumerate(regions):
+            print(f"      Region {ri}: shape {region.shape}")
+            
             df = _recover_header(region)
-            if df is None or df.empty:
+            if df is None:
+                print(f"        ❌ recover_header returned None")
                 continue
+            if df.empty:
+                print(f"        ❌ DataFrame empty after recover_header")
+                continue
+            
+            print(f"        After recover_header: {df.shape}")
+            
             df = _apply_eu_numbers(_strip_text_cells(_clean_columns(df)))
+            print(f"        After cleaning: {df.shape}")
+            
+            if df.empty:
+                print(f"        ❌ DataFrame empty after cleaning")
+                continue
+            
             key = f"{name}:{sheet}" if ri == 0 else f"{name}:{sheet}#{ri + 1}"
             dataframes[key] = df
+            print(f"        ✓ Added: {key}")
+    
+    print(f"\n  Total dataframes: {len(dataframes)}\n")
     return [], dataframes
 
 

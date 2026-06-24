@@ -691,19 +691,33 @@ class MainWindow(QMainWindow):
                 self.file_list.addItem(path.split("/")[-1])
 
     def _build_index(self) -> None:
+        """Build index with debugging."""
         if self.busy:
             return
         if not self.pending_files:
             QMessageBox.information(self, "No files",
-                                    "Add at least one PDF or Excel file first.")
+                "Add at least one PDF or Excel file first.")
             return
-        self._set_busy(True, "Indexing documents \u2026")
+        
+        print("\n" + "="*60)
+        print("DEBUG: Starting index build")
+        print(f"DEBUG: Files to process: {self.pending_files}")
+        print(f"DEBUG: Number of files: {len(self.pending_files)}")
+        print("="*60 + "\n")
+        
+        self._set_busy(True, "Indexing documents…")
+        
         worker = Worker(self.rag.index_documents, list(self.pending_files))
         worker.signals.progress.connect(lambda m: self.status.showMessage(m))
         worker.signals.result.connect(self._on_index_built)
-        worker.signals.error.connect(self._show_error)
+        worker.signals.error.connect(self._on_index_error)
         worker.signals.finished.connect(lambda: self._set_busy(False))
         self.pool.start(worker)
+
+    def _on_index_error(self, error_msg: str) -> None:
+        """Handle indexing errors."""
+        print(f"\n❌ INDEX ERROR: {error_msg}\n")
+        self._show_error(f"Index error: {error_msg}")
 
     def _on_index_built(self, payload) -> None:
         stats, dataframes = payload

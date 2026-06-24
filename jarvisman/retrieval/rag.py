@@ -212,9 +212,7 @@ class RAGPipeline:
                     from jarvisman.semantics import table_cards as tc
                     report("Understanding tables ...")
                     existing = tc.load_cards(cfg.INDEX_DIR)
-                    self.table_cards = tc.build_cards(
-                        self.ollama, self.chat_model, self.semantic_model,
-                        dataframes, existing, report)
+                    
                     tc.save_cards(cfg.INDEX_DIR, self.table_cards)
                 except Exception:
                     self.table_cards = {}
