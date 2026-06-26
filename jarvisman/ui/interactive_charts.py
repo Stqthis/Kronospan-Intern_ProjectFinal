@@ -57,7 +57,7 @@ class InteractiveCharts:
         
         fig = go.Figure()
         
-        for i, col in enumerate(num_cols[:5]):
+        for i, col in enumerate(num_cols[:5]):  # Max 5 lines
             fig.add_trace(go.Scatter(
                 y=df[col],
                 name=col,
@@ -89,7 +89,7 @@ class InteractiveCharts:
         
         fig = go.Figure()
         
-        for i, col in enumerate(num_cols[:5]):
+        for i, col in enumerate(num_cols[:5]):  # Max 5 areas
             fig.add_trace(go.Scatter(
                 y=df[col],
                 name=col,
@@ -166,20 +166,39 @@ class InteractiveCharts:
 
     @staticmethod
     def get_chart(chart_type: str, df: pd.DataFrame, title: str = ""):
-        """Get the appropriate chart type."""
-        chart_type = chart_type.lower()
+        """Get the appropriate chart type with better error handling."""
+        chart_type = chart_type.lower().strip()
         
-        if chart_type == 'bar':
-            return InteractiveCharts.create_bar_chart(df, title)
-        elif chart_type == 'barh':
-            return InteractiveCharts.create_bar_chart(df, title)
-        elif chart_type == 'line':
-            return InteractiveCharts.create_line_chart(df, title)
-        elif chart_type == 'area':
-            return InteractiveCharts.create_area_chart(df, title)
-        elif chart_type in ['pie', 'donut']:
-            return InteractiveCharts.create_pie_chart(df, title)
-        elif chart_type == 'scatter':
-            return InteractiveCharts.create_scatter_chart(df, title)
+        print(f"DEBUG: get_chart called with type={chart_type}, df.shape={df.shape}")
         
-        return InteractiveCharts.create_bar_chart(df, title)
+        try:
+            if chart_type == 'bar':
+                result = InteractiveCharts.create_bar_chart(df, title)
+            elif chart_type == 'barh':
+                result = InteractiveCharts.create_barh_chart(df, title)
+            elif chart_type == 'line':
+                result = InteractiveCharts.create_line_chart(df, title)
+            elif chart_type == 'area':
+                result = InteractiveCharts.create_area_chart(df, title)
+            elif chart_type == 'pie':
+                result = InteractiveCharts.create_pie_chart(df, title)
+            elif chart_type == 'donut':
+                result = InteractiveCharts.create_donut_chart(df, title)
+            elif chart_type == 'scatter':
+                result = InteractiveCharts.create_scatter_chart(df, title)
+            else:
+                print(f"DEBUG: Unknown chart type: {chart_type}, defaulting to bar")
+                result = InteractiveCharts.create_bar_chart(df, title)
+            
+            if result is None:
+                print(f"DEBUG: Chart creation returned None")
+                return None
+            
+            print(f"DEBUG: Chart created successfully")
+            return result
+            
+        except Exception as e:
+            print(f"DEBUG: Error in get_chart: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None

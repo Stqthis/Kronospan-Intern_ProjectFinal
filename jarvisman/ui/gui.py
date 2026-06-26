@@ -1228,64 +1228,35 @@ class MainWindow(QMainWindow):
         self.status.showMessage(first, 6000)
 
     def _on_chart_visualization_requested(self, chart_type: str, df) -> None:
-        """Generate and display chart when user selects from dropdown."""
+        """Generate and display interactive chart when user selects from dropdown."""
         if df is None or df.empty:
             self._show_error("No data available for visualization")
             return
         
         try:
-            from jarvisman.ui.charting import default_spec, render, ChartSpec
-            import matplotlib.pyplot as plt
-            from matplotlib.figure import Figure
-            from io import BytesIO
+            from jarvisman.ui.interactive_charts import InteractiveCharts
+            import plotly.io as pio
             
-            # Special handling for line and area charts
-            if chart_type in ['line', 'area']:
-                # Get only numeric columns for line/area charts
-                numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-                
-                if not numeric_cols:
-                    self._show_error("No numeric data available for line/area chart")
-                    return
-                
-                # Use only numeric columns
-                df_chart = df[numeric_cols].copy()
-                
-                # Create chart spec manually for line/area
-                spec = ChartSpec(chart_type=chart_type)
-                spec.y = numeric_cols  # All numeric columns as separate lines
-                
-                fig = Figure(figsize=(10, 6), dpi=100)
-                render(fig, df_chart, spec, theme=THEME,
-                    title=f"{chart_type.replace('_', ' ').title()}")
+            # Get chart
+            fig = InteractiveCharts.get_chart(chart_type, df)
             
-            else:
-                # For bar, pie, scatter - use default spec
-                spec = default_spec(df)
-                spec.chart_type = chart_type if chart_type != 'donut' else 'pie'
-                
-                fig = Figure(figsize=(10, 6), dpi=100)
-                render(fig, df, spec, theme=THEME,
-                    title=f"{chart_type.replace('_', ' ').title()}")
+            if fig is None:
+                self._show_error(f"Cannot create {chart_type} chart with this data")
+                return
             
-            # Convert to PNG
-            buf = BytesIO()
-            fig.savefig(buf, format='png', bbox_inches='tight',
-                    facecolor=THEME['bg'], edgecolor='none', dpi=100)
-            buf.seek(0)
-            png_bytes = buf.getvalue()
-            buf.close()
-            plt.close(fig)
+            # Convert to HTML (interactive, no Chrome needed!)
+            html = pio.to_html(fig, include_plotlyjs='cdn', div_id="chart")
             
-            # Display image
-            self._append_image(png_bytes)
+            # Display in chat
+            self.chat.insertHtml(html)
+            cur = self._cursor_end()
+            self.chat.setTextCursor(cur)
+            self.chat.ensureCursorVisible()
+            
             self._append_html('<div style="height:14px;"></div>')
             
         except Exception as e:
-            import traceback
-            error_msg = f"Chart error: {str(e)}"
-            print(f"Full error:\n{traceback.format_exc()}")
-            self._show_error(error_msg)
+            self._show_error(f"Chart error: {str(e)}")
 def main() -> None:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")

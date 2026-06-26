@@ -173,37 +173,12 @@ class ResponseDataExtractor:
         return None
 
     @staticmethod
+    @staticmethod
     def _suggest_charts(df: pd.DataFrame) -> list[str]:
-        """Suggest appropriate chart types based on data structure."""
-        suggestions = []
-        
-        if df.empty:
-            return suggestions
-        
-        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        categorical_cols = df.select_dtypes(exclude=['number']).columns.tolist()
-        
-        num_rows = len(df)
-        num_numeric = len(numeric_cols)
-        num_categorical = len(categorical_cols)
-        
-        if num_categorical >= 1 and num_numeric >= 1:
-            suggestions.append('bar')
-            suggestions.append('barh')
-        
-        if num_categorical >= 1 and num_numeric == 1 and num_rows <= 10:
-            suggestions.append('pie')
-            suggestions.append('donut')
-        
-        if num_numeric >= 1 and num_rows >= 3:
-            suggestions.append('line')
-            suggestions.append('area')
-        
-        if num_numeric >= 2:
-            suggestions.append('scatter')
-        
-        return suggestions if suggestions else ['bar']
-
+        """Always return all 7 chart types for maximum flexibility."""
+        # Show all charts regardless of data structure
+        # Users can choose what works best for their data
+        return ['bar', 'barh', 'line', 'area', 'pie', 'donut', 'scatter']
     @staticmethod
     def get_all_chart_types() -> list[str]:
         """Return all supported chart types."""

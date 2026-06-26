@@ -373,12 +373,33 @@ def _strip_text_cells(df: "pd.DataFrame") -> "pd.DataFrame":
 
 
 def load_excel(path: str) -> Tuple[list[dict], dict]:
-    """Excel -> {'file:sheet': DataFrame}; with debugging."""
+    """Excel -> {'file:sheet': DataFrame}; with debugging and engine handling."""
     name = os.path.basename(path)
     print(f"\n📄 Loading Excel: {name}")
     
-    raw_sheets = pd.read_excel(path, sheet_name=None, header=None)
-    print(f"  Sheets found: {list(raw_sheets.keys())}")
+    # Limit rows for speed
+    MAX_ROWS = 5000
+    
+    # Determine engine based on file extension
+    if path.lower().endswith('.xlsx') or path.lower().endswith('.xlsm'):
+        engine = 'openpyxl'
+    elif path.lower().endswith('.xls'):
+        engine = 'xlrd'
+    else:
+        engine = None  # Let pandas figure it out
+    
+    try:
+        raw_sheets = pd.read_excel(
+            path, 
+            sheet_name=None, 
+            header=None, 
+            engine=engine,
+            nrows=MAX_ROWS  # ← ADD THIS
+        )
+        print(f"  Sheets found: {list(raw_sheets.keys())}")
+    except Exception as e:
+        print(f"  ❌ Error reading file: {e}")
+        return [], {}
     
     if path.lower().endswith((".xlsx", ".xlsm")):
         _fill_merged_headers(path, raw_sheets)
@@ -418,7 +439,6 @@ def load_excel(path: str) -> Tuple[list[dict], dict]:
     
     print(f"\n  Total dataframes: {len(dataframes)}\n")
     return [], dataframes
-
 
 def ingest_file(path: str) -> Tuple[list[dict], dict]:
     ext = os.path.splitext(path)[1].lower()

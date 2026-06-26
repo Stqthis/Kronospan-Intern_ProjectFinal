@@ -197,7 +197,9 @@ USER_HONORIFIC = os.environ.get("RAG_USER_HONORIFIC", "sir")
 CHART_TOP_N = int(os.environ.get("RAG_CHART_TOP_N", "20"))
 CHART_VALUE_LABELS = os.environ.get("RAG_CHART_LABELS", "1") == "1"  # value labels on bars
 # ---- Spark-era features (each independently switchable) -------------------- #
-TABLE_CARDS = False       # per-table semantic cards
+TABLE_CARDS = False
+TABLE_CARDS = os.environ.get("RAG_TABLE_CARDS", "1") == "1"
+SKIP_TABLE_PROFILING = True  # ← ADD THIS LINE       # per-table semantic cards
 SCHEMA_SAMPLES = os.environ.get("RAG_SCHEMA_SAMPLES", "1") == "1"  # sample values in schema block
 TIER05_ENABLED = os.environ.get("RAG_TIER05", "1") == "1"          # zero-LLM planning for simple shapes
 PLAN_CACHE = os.environ.get("RAG_PLAN_CACHE", "1") == "1"          # normalized question -> bound plan
