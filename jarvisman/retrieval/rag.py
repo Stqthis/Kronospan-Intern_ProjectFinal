@@ -182,21 +182,28 @@ class RAGPipeline:
             self.bm25 = BM25Index(cfg.BM25_K1, cfg.BM25_B)
 
         if dataframes:
-            # The model reads each table's columns + sample rows and decides
-            # every column's type, date format, and meaning; the code applies
-            # the types and keeps the meanings. Done once here, so the saved
-            # tables are typed and the meanings are available at query time.
-            # Enrichment (table summary + per-column meaning) is an
-            # UNDERSTANDING task -> use the understanding model when one is
-            # configured (llama3:70b writes better descriptions than the
-            # code model). Falls back to the chat model on single-model setups.
-            _enrich_model = cfg.model_for("understand", self.chat_model)
-            dataframes, self.table_profile = profile_and_apply(
-                self.ollama, _enrich_model, dataframes, report
-            )
+            # Check if we should skip profiling for speed
+            if hasattr(cfg, 'SKIP_TABLE_PROFILING') and cfg.SKIP_TABLE_PROFILING:
+                report("Skipping table profiling (fast mode)...")
+                self.table_profile = {}
+            else:
+                # The model reads each table's columns + sample rows and decides
+                # every column's type, date format, and meaning; the code applies
+                # the types and keeps the meanings. Done once here, so the saved
+                # tables are typed and the meanings are available at query time.
+                # Enrichment (table summary + per-column meaning) is an
+                # UNDERSTANDING task -> use the understanding model when one is
+                # configured (llama3:70b writes better descriptions than the
+                # code model). Falls back to the chat model on single-model setups.
+                _enrich_model = cfg.model_for("understand", self.chat_model)
+                dataframes, self.table_profile = profile_and_apply(
+                    self.ollama, _enrich_model, dataframes, report
+                )
+            
             report("Saving tables ...")
             save_tables(cfg.INDEX_DIR, dataframes)
             save_profile(cfg.INDEX_DIR, self.table_profile)
+            
             # Statistical semantic model: full-column stats, roles, summary
             # rows, relationships -- code-computed; meanings come from the
             # LLM profile above, so this adds NO extra LLM calls.
@@ -205,6 +212,7 @@ class RAGPipeline:
                 dataframes, meanings=self.table_profile
             )
             save_semantic_model(cfg.INDEX_DIR, self.semantic_model)
+            
             # Table cards: one LLM call per table, regenerated only when a
             # table's schema hash changes. Optional and best-effort.
             if cfg.TABLE_CARDS:
@@ -212,10 +220,13 @@ class RAGPipeline:
                     from jarvisman.semantics import table_cards as tc
                     report("Understanding tables ...")
                     existing = tc.load_cards(cfg.INDEX_DIR)
-                    
+                    self.table_cards = tc.build_cards(
+                        self.ollama, self.chat_model, self.semantic_model,
+                        dataframes, existing, report)
                     tc.save_cards(cfg.INDEX_DIR, self.table_cards)
                 except Exception:
                     self.table_cards = {}
+            
             self.index_version = str(int(self.index_version) + 1) \
                 if str(getattr(self, "index_version", "0")).isdigit() else "1"
         else:

@@ -92,7 +92,11 @@ class ChartTypeSelector(QWidget):
 
     def set_available_charts(self, chart_types: list[str]) -> None:
         """Set the available chart types to display in dropdown."""
-        self.available_charts = chart_types or []
+        # If empty list, show all charts
+        if not chart_types:
+            chart_types = ['bar', 'barh', 'line', 'area', 'pie', 'donut', 'scatter']
+        
+        self.available_charts = chart_types
         
         self.chart_combo.clear()
         
