@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jarvisman.ui.theme_manager import ThemeManager
+
 import html
 import sys
 from typing import Optional
@@ -236,6 +238,9 @@ class MainWindow(QMainWindow):
         self._chart_seq = 0
         self._buf = None              # when a list, _append_html buffers into it
         self._sidebar_visible = True
+        self.is_dark_theme = True
+        self.theme_manager = ThemeManager()
+        self.current_theme = self.theme_manager.get_theme(self.is_dark_theme)
 
         self.ollama = OllamaClient(cfg.OLLAMA_HOST)
         self.store = VectorStore()
@@ -243,9 +248,10 @@ class MainWindow(QMainWindow):
                                cfg.DEFAULT_EMBED_MODEL)
         self.agent = Agent(self.ollama, self.rag, cfg.DEFAULT_CHAT_MODEL)
 
-        self.setStyleSheet(_qss())
+        self.setStyleSheet(self._get_stylesheet())
         self._build_ui()
         self._startup_checks()
+        self.conversation_history = []  # Store all messages
 
     # ------------------------------------------------------------------ #
     def _build_ui(self) -> None:
@@ -382,6 +388,14 @@ class MainWindow(QMainWindow):
         self.toggle_btn.setToolTip(_t("settings"))
         self.toggle_btn.clicked.connect(self._toggle_sidebar)
         header.addWidget(self.toggle_btn)
+        
+        # ADD THEME TOGGLE BUTTON
+        self.theme_btn = QToolButton()
+        self.theme_btn.setText("🌙")
+        self.theme_btn.setToolTip("Toggle theme")
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        header.addWidget(self.theme_btn)
+        
         header.addStretch(1)
         self.typing_label = QLabel("")
         self.typing_label.setObjectName("typing")
@@ -404,10 +418,10 @@ class MainWindow(QMainWindow):
         self.chat.setVisible(False)
         
         # Chart visualization widgets (NEW)
-        self.data_summary = DataSummaryPanel(theme=THEME)
+        self.data_summary = DataSummaryPanel(theme=self.current_theme)
         self.data_summary.setVisible(False)
         
-        self.chart_selector = ChartTypeSelector(parent=self, theme=THEME)
+        self.chart_selector = ChartTypeSelector(parent=self, theme=self.current_theme)
         self.chart_selector.visualization_requested.connect(self._on_chart_visualization_requested)
         self.chart_selector.setVisible(False)
         
@@ -440,6 +454,7 @@ class MainWindow(QMainWindow):
         self._update_welcome()
         self._update_badges()
         return panel
+
 
     def _build_welcome_widget(self) -> QWidget:
         w = QWidget()
@@ -530,6 +545,72 @@ class MainWindow(QMainWindow):
         self.advanced_box.setVisible(show)
         arrow = "\u25be" if show else "\u25b8"
         self.advanced_btn.setText(f"{arrow} " + _t("advanced"))
+    
+    def _toggle_theme(self) -> None:
+        """Toggle between dark and light theme."""
+        self.is_dark_theme = not self.is_dark_theme
+        self.current_theme = self.theme_manager.get_theme(self.is_dark_theme)
+        
+        T = self.current_theme
+        
+        # Update button
+        self.theme_btn.setText("☀️" if self.is_dark_theme else "🌙")
+        
+        # Update main stylesheet
+        self.setStyleSheet(self._get_stylesheet())
+        
+        # Get current HTML
+        html_content = self.chat.toHtml()
+        
+        if html_content:
+            # Replace theme colors in the HTML
+            old_theme = self.theme_manager.get_theme(not self.is_dark_theme)
+            
+            # Replace old colors with new colors
+            html_content = html_content.replace(old_theme['bg'], T['bg'])
+            html_content = html_content.replace(old_theme['text'], T['text'])
+            html_content = html_content.replace(old_theme['panel'], T['panel'])
+            html_content = html_content.replace(old_theme['accent'], T['accent'])
+            html_content = html_content.replace(old_theme['accent_dim'], T['accent_dim'])
+            html_content = html_content.replace(old_theme['panel2'], T['panel2'])
+            html_content = html_content.replace(old_theme['border'], T['border'])
+            
+            # Re-apply the updated HTML
+            self.chat.setHtml(html_content)
+        
+        # Update chat widget COLORS WITHOUT clearing text
+        self.chat.setStyleSheet(
+            f"""
+            QTextBrowser {{
+                background-color: {T['bg']};
+                color: {T['text']};
+                border: none;
+                font-size: 14px;
+            }}
+            """
+        )
+        
+        # Update input box
+        self.input.setStyleSheet(
+            f"""
+            QLineEdit {{
+                background: {T['panel2']};
+                color: {T['text']};
+                border: 1px solid {T['border']};
+                border-radius: 8px;
+                padding: 7px 10px;
+            }}
+            """
+        )
+        
+        # Update sidebar
+        self.sidebar.setStyleSheet(f"QWidget {{ background: {T['bg']}; }}")
+        
+        # Force repaint
+        self.repaint()
+        self.update()
+
+
 
     @staticmethod
     def _looks_like_embedder(name: str) -> bool:
@@ -585,7 +666,9 @@ class MainWindow(QMainWindow):
 
     # typing indicator
     def _start_typing(self) -> None:
+        from time import time
         self._typing_dots = 0
+        self._typing_start_time = time()  # ← ADD THIS
         if not hasattr(self, "_typing_timer"):
             self._typing_timer = QTimer(self)
             self._typing_timer.timeout.connect(self._tick_typing)
@@ -594,8 +677,17 @@ class MainWindow(QMainWindow):
 
     def _tick_typing(self) -> None:
         self._typing_dots = (self._typing_dots + 1) % 4
+        
+        # Calculate elapsed time if timer started
+        elapsed = ""
+        if hasattr(self, '_typing_start_time'):
+            from time import time
+            elapsed_sec = int(time() - self._typing_start_time)
+            if elapsed_sec > 0:
+                elapsed = f" ({elapsed_sec}s)"
+        
         base = _t("thinking").format(name=cfg.ASSISTANT_NAME).rstrip(" .\u2026")
-        self.typing_label.setText(base + " " + "\u00b7" * self._typing_dots)
+        self.typing_label.setText(base + " " + "\u00b7" * self._typing_dots + elapsed)
 
     def _stop_typing(self) -> None:
         if hasattr(self, "_typing_timer"):
@@ -830,7 +922,7 @@ class MainWindow(QMainWindow):
     def _styled_table(self, table_html: str) -> str:
         t = table_html.replace(
             "<table", '<table border="0" cellspacing="0" cellpadding="6"', 1)
-        t = t.replace("<th", f'<th bgcolor="{THEME["panel2"]}"')
+        t = t.replace("<th", f'<th bgcolor="{self.current_theme["panel2"]}"')
         return t
 
     @staticmethod
@@ -939,7 +1031,7 @@ class MainWindow(QMainWindow):
         heading = q[:1].upper() + q[1:] if q else "Result"
         if heading and heading[-1] not in ".?!":
             heading += ""
-        accent = THEME.get("accent", "#7aa2f7")
+        accent = self.current_theme.get("accent", "#7aa2f7")
         out = [f'<div style="margin:4px 0 6px 0; font-weight:600; '
                f'color:{accent};">{html.escape(heading)}</div>']
 
@@ -1001,8 +1093,9 @@ class MainWindow(QMainWindow):
             frags, self._buf = self._buf, None
         if not frags:
             return
-        card = (f'<div style="background:{THEME["panel"]}; '
-                f'border-left:3px solid {THEME["accent_dim"]}; '
+        T = self.current_theme
+        card = (f'<div style="background:{T["panel"]}; '
+                f'border-left:3px solid {T["accent_dim"]}; '
                 f'padding:8px 14px; margin:0 0 8px 0;">{"".join(frags)}</div>')
         self.chat.append(card)
         cur = self._cursor_end()
@@ -1167,18 +1260,20 @@ class MainWindow(QMainWindow):
     def _add_user_message(self, text: str) -> None:
         safe = html.escape(text)
         self._append_html(
-            f'<div style="margin:10px 0 4px 0; text-align:right;">'
-            f'<span style="background:{THEME["accent_dim"]}; color:#ffffff; '
-            f'padding:8px 14px; border-radius:14px; display:inline-block; '
-            f'max-width:80%; text-align:left;">{safe}</span></div>')
+            f'<div style="margin:10px 0 4px 0; display: flex; gap: 10px; justify-content: flex-end;">'
+            f'<div style="background:{self.current_theme["accent_dim"]}; color:#ffffff; '
+            f'padding:8px 14px; border-radius:14px; max-width:80%; text-align:left;">{safe}</div>'
+            f'<div style="font-size: 20px; min-width: 30px; text-align: right;">👤</div>'
+            f'</div>')
 
     def _start_assistant_line(self) -> None:
         self._append_html(
-            f'<div style="margin:8px 0 2px 0;">'
-            f'<span style="color:{THEME["accent"]}; font-size:13px;">\u25c6</span> '
-            f'<span style="color:{THEME["accent"]}; font-weight:700; '
-            f'font-size:12px;">{html.escape(cfg.ASSISTANT_NAME)}</span></div>')
-
+            f'<div style="margin:8px 0 2px 0; display: flex; gap: 10px; align-items: center;">'
+            f'<div style="font-size: 20px;">🤖</div>'
+            f'<div style="color:{self.current_theme["accent"]}; font-weight:700; '
+            f'font-size:12px;">{html.escape(cfg.ASSISTANT_NAME)}</div>'
+            f'</div>')
+        
     def _append_image(self, png_bytes: bytes) -> None:
         image = QImage()
         if not image.loadFromData(png_bytes):
@@ -1286,6 +1381,73 @@ class MainWindow(QMainWindow):
             error_msg = f"Chart error: {str(e)}"
             print(f"Full error:\n{traceback.format_exc()}")
             self._show_error(error_msg)
+    def _get_stylesheet(self) -> str:
+        """Get stylesheet using current theme."""
+        T = self.current_theme
+        return f"""
+        QMainWindow, QWidget {{ background: {T['bg']}; color: {T['text']};
+            font-size: 14px; }}
+        QLabel {{ color: {T['text']}; }}
+        QLabel#muted {{ color: {T['muted']}; font-size: 12px; }}
+        QLabel#heading {{ color: {T['text']}; font-size: 12px; font-weight: 700;
+            letter-spacing: 1px; }}
+        QFrame#card {{ background: {T['panel']}; border: 1px solid {T['border']};
+            border-radius: 12px; }}
+        QFrame#sep {{ background: {T['border']}; max-height: 1px; border: none; }}
+        QComboBox, QLineEdit {{ background: {T['panel2']}; color: {T['text']};
+            border: 1px solid {T['border']}; border-radius: 8px;
+            padding: 7px 10px; selection-background-color: {T['accent_dim']}; }}
+        QComboBox:focus, QLineEdit:focus {{ border: 1px solid {T['accent']}; }}
+        QComboBox QAbstractItemView {{ background: {T['panel2']};
+            color: {T['text']}; selection-background-color: {T['accent_dim']};
+            border: 1px solid {T['border']}; outline: none; }}
+        QPushButton {{ background: {T['panel2']}; color: {T['text']};
+            border: 1px solid {T['border']}; border-radius: 8px;
+            padding: 8px 14px; }}
+        QPushButton:hover {{ border: 1px solid {T['accent']}; }}
+        QPushButton:disabled {{ color: {T['muted']}; }}
+        QPushButton#primary {{ background: {T['accent']}; color: #06121f;
+            border: none; font-weight: 700; }}
+        QPushButton#primary:hover {{ background: #5aa6ff; }}
+        QPushButton#primary:disabled {{ background: {T['panel2']};
+            color: {T['muted']}; }}
+        QToolButton {{ background: transparent; color: {T['muted']};
+            border: none; font-size: 18px; padding: 2px 6px; }}
+        QToolButton:hover {{ color: {T['accent']}; }}
+        QListWidget {{ background: {T['panel2']}; color: {T['text']};
+            border: 1px solid {T['border']}; border-radius: 8px; padding: 4px; }}
+        QListWidget::item {{ padding: 5px 6px; border-radius: 6px; }}
+        QListWidget::item:selected {{ background: {T['accent_dim']}; }}
+        QTextBrowser {{ background: {T['bg']}; color: {T['text']};
+            border: none; font-size: 14px; }}
+        QProgressBar {{ background: {T['panel2']}; border: 1px solid {T['border']};
+            border-radius: 6px; height: 6px; }}
+        QProgressBar::chunk {{ background: {T['accent']}; border-radius: 6px; }}
+        QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+        QScrollBar::handle:vertical {{ background: {T['border']};
+            border-radius: 5px; min-height: 30px; }}
+        QScrollBar::handle:vertical:hover {{ background: {T['muted']}; }}
+        QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+        QStatusBar {{ background: {T['panel']}; color: {T['muted']}; }}
+        QSplitter::handle {{ background: {T['border']}; }}
+        QPushButton#chip {{ background: {T['panel2']}; color: {T['text']};
+            border: 1px solid {T['border']}; border-radius: 16px;
+            padding: 9px 16px; text-align: center; }}
+        QPushButton#chip:hover {{ border: 1px solid {T['accent']};
+            color: {T['accent']}; }}
+        QToolButton#advanced {{ color: {T['muted']}; font-size: 12px;
+            padding: 2px 0; }}
+        QToolButton#advanced:hover {{ color: {T['accent']}; }}
+        QLabel#badge {{ color: {T['muted']}; font-size: 11px;
+            background: {T['panel']}; border: 1px solid {T['border']};
+            border-radius: 10px; padding: 3px 10px; }}
+        QLabel#warn {{ color: {T['warn']}; font-size: 11px; }}
+        QLabel#hero {{ color: {T['text']}; font-size: 25px; font-weight: 800; }}
+        QLabel#herosub {{ color: {T['muted']}; font-size: 16px; }}
+        QLabel#heromark {{ color: {T['accent']}; font-size: 30px; }}
+        QLabel#suggest {{ color: {T['muted']}; font-size: 12px; }}
+        QLabel#typing {{ color: {T['accent']}; font-size: 12px; }}
+        """
 def main() -> None:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
