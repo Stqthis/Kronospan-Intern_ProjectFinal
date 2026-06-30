@@ -18,12 +18,9 @@ from jarvisman.ingest.column_types import profile_and_apply, save_profile, load_
 from jarvisman.semantics.semantic_model import build_semantic_model, save_semantic_model, load_semantic_model
 
 GROUNDED_SYSTEM = (
-    "You are a careful assistant answering questions about the user's documents. "
-    "Use ONLY the information in the provided context excerpts. "
-    "If the answer is not contained in the context, say clearly that the "
-    "documents do not contain that information -- do not guess. "
-    "Where useful, cite the source like [file p.3]. "
-    "Be concise and factual."
+    "You are a helpful assistant answering questions about documents. "
+    "Use ONLY the provided context. If information is not in the context, "
+    "say so clearly. Be concise and factual."
 )
 
 
@@ -54,6 +51,26 @@ def load_tables(directory: str) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+    
+def analyze_relationships(self, dataframes: dict) -> dict:
+    """Analyze and report table relationships."""
+    from jarvisman.semantics.relationship_detector import RelationshipDetector
+    
+    relationships = RelationshipDetector.find_relationships(dataframes)
+    
+    print("\n📊 DETECTED TABLE RELATIONSHIPS:")
+    print("="*70)
+    
+    for rel_key, rels in relationships.items():
+        print(f"\n{rel_key}:")
+        for rel in rels:
+            print(f"  {rel['left_column']} → {rel['right_column']}")
+            print(f"    Type: {rel['type']}")
+            print(f"    Strength: {rel['strength']:.2%}")
+    
+    print("="*70 + "\n")
+    
+    return relationships
 
 
 class RAGPipeline:
@@ -76,6 +93,7 @@ class RAGPipeline:
         self._query_vec_cache: dict[str, list[float]] = {}
         self.table_profile: dict = {}   # {table: {summary, columns:{col:{type,format,meaning}}}}
         self.semantic_model = None      # statistical SemanticModel built at index time
+        self.query_cache = {}  # Add this
 
     @property
     def embed_cache(self) -> EmbeddingCache:
@@ -213,6 +231,34 @@ class RAGPipeline:
             )
             save_semantic_model(cfg.INDEX_DIR, self.semantic_model)
             
+            # ===== NEW: Detect relationships between tables =====
+            # Detect relationships (can be enabled later when codegen improves)
+            report("Analyzing table relationships ...")
+            if hasattr(cfg, 'DETECT_RELATIONSHIPS') and cfg.DETECT_RELATIONSHIPS:
+                try:
+                    from jarvisman.semantics.relationship_detector import RelationshipDetector
+                    self.relationships = RelationshipDetector.find_relationships(dataframes)
+                    
+                    if self.relationships:
+                        print("\n📊 DETECTED TABLE RELATIONSHIPS:")
+                        print("="*70)
+                        for rel_key, rels in self.relationships.items():
+                            print(f"\n{rel_key}:")
+                            for rel in rels:
+                                print(f"  {rel['left_column']} → {rel['right_column']}")
+                                print(f"    Type: {rel['type']}")
+                                print(f"    Strength: {rel['strength']:.2%}")
+                        print("="*70 + "\n")
+                        report(f"Found {len(self.relationships)} relationship(s)")
+                    else:
+                        self.relationships = {}
+                except Exception as e:
+                    print(f"\n⚠️ Error detecting relationships: {e}\n")
+                    self.relationships = {}
+            else:
+                self.relationships = {}
+            # ===== END: Relationship detection =====
+            
             # Table cards: one LLM call per table, regenerated only when a
             # table's schema hash changes. Optional and best-effort.
             if cfg.TABLE_CARDS:
@@ -232,8 +278,10 @@ class RAGPipeline:
         else:
             self.table_profile = {}
             self.semantic_model = None
+            self.relationships = {}
 
         return stats, dataframes
+    
 
     def load_persisted(self, directory: str = cfg.INDEX_DIR) -> dict:
         """Restore the FAISS index (+ rebuild BM25) AND the tables.
@@ -327,12 +375,15 @@ class RAGPipeline:
             if token_callback:
                 token_callback(msg)
             return msg, []
-
+        
         context, sources = self._build_context(hits)
+        
+        # Use simple system prompt (NOT auto-generated)
         messages = [
             {"role": "system", "content": GROUNDED_SYSTEM},
             {"role": "user", "content": f"Context excerpts:\n{context}\n\nQuestion: {query}"},
         ]
+        
         text = self.ollama.chat(
             self.chat_model,
             messages,
@@ -340,4 +391,20 @@ class RAGPipeline:
             stream=bool(token_callback),
             on_token=token_callback,
         )
+        
         return text, sources
+    def _build_relationship_context(self) -> str:
+        """Build context about available table relationships."""
+        if not hasattr(self, 'relationships') or not self.relationships:
+            return ""
+        
+        context = "\n# Available table relationships for joins:\n"
+        
+        for rel_key, rels in self.relationships.items():
+            for rel in rels:
+                context += f"# {rel['left_table']} can join {rel['right_table']} on: "
+                context += f"{rel['left_column']} = {rel['right_column']}\n"
+        
+        return context
+    
+    

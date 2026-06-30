@@ -607,11 +607,15 @@ class MainWindow(QMainWindow):
         
         # Update sidebar
         self.sidebar.setStyleSheet(f"QWidget {{ background: {T['bg']}; }}")
+    
+        # Force button to keep primary styling
+        if hasattr(self, 'build_btn'):
+            self.build_btn.setStyleSheet("")  # Clear
+            self.build_btn.setStyleSheet(self._get_stylesheet())  # Reapply
         
         # Force repaint
         self.repaint()
         self.update()
-
 
 
     @staticmethod
@@ -1103,6 +1107,26 @@ class MainWindow(QMainWindow):
         self._prov_store[f"copy:{copy_key}"] = answer_html
         
         T = self.current_theme
+        
+        # Build source attribution
+        source_html = ""
+        sources = result.get("sources") or []
+        if sources:
+            source_html = f'<div style="margin-top:12px; padding-top:10px; border-top: 1px solid {T["border"]};">'
+            source_html += f'<span style="color:{T["muted"]}; font-size:11px;"><b>📊 Sources:</b></span><br>'
+            for source in sources:
+                file_name = source.get("source", "Unknown")
+                location = source.get("location", "")
+                score = source.get("score", "")
+                source_html += f'<span style="color:{T["muted"]}; font-size:11px;">'
+                source_html += f'  • <b>{file_name}</b>'
+                if location:
+                    source_html += f' - {location}'
+                if score:
+                    source_html += f' ({score})'
+                source_html += f'<br></span>'
+            source_html += '</div>'
+        
         card = (f'<div style="margin:12px 0 8px 0; padding:14px 16px; '
                 f'background:{T["panel"]}; border-radius:8px;">'
                 f'<div style="text-align: right; margin-bottom: 8px;">'
@@ -1112,6 +1136,7 @@ class MainWindow(QMainWindow):
                 f'📋 Copy</span></a>'
                 f'</div>'
                 f'{answer_html}'
+                f'{source_html}'
                 f'</div>')
         self.chat.append(card)
         cur = self._cursor_end()
@@ -1417,10 +1442,10 @@ class MainWindow(QMainWindow):
             padding: 8px 14px; }}
         QPushButton:hover {{ border: 1px solid {T['accent']}; }}
         QPushButton:disabled {{ color: {T['muted']}; }}
-        QPushButton#primary {{ background: {T['accent']}; color: #06121f;
-            border: none; font-weight: 700; }}
-        QPushButton#primary:hover {{ background: #5aa6ff; }}
-        QPushButton#primary:disabled {{ background: {T['panel2']};
+        QPushButton#primary {{ background: {T['accent']}; color: {T['text']};
+            border: none; font-weight: 700; padding: 8px 14px; }}
+        QPushButton#primary:hover {{ background: {T['accent']}; opacity: 0.8; }}
+        QPushButton#primary:disabled {{ background: {T['muted']};
             color: {T['muted']}; }}
         QToolButton {{ background: transparent; color: {T['muted']};
             border: none; font-size: 18px; padding: 2px 6px; }}
