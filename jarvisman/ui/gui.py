@@ -6,6 +6,8 @@ import html
 import sys
 from typing import Optional
 
+from PyQt6.QtGui import QClipboard
+
 from PyQt6.QtCore import Qt, QThreadPool, QTimer, QUrl
 from PyQt6.QtGui import QImage, QTextCursor, QTextDocument
 from PyQt6.QtWidgets import (
@@ -1093,19 +1095,32 @@ class MainWindow(QMainWindow):
             frags, self._buf = self._buf, None
         if not frags:
             return
+        
+        # Store answer text for copying
+        MainWindow._prov_seq += 1
+        copy_key = str(MainWindow._prov_seq)
+        answer_html = "".join(frags)
+        self._prov_store[f"copy:{copy_key}"] = answer_html
+        
         T = self.current_theme
-        card = (f'<div style="background:{T["panel"]}; '
-                f'border-left:3px solid {T["accent_dim"]}; '
-                f'padding:8px 14px; margin:0 0 8px 0;">{"".join(frags)}</div>')
+        card = (f'<div style="margin:12px 0 8px 0; padding:14px 16px; '
+                f'background:{T["panel"]}; border-radius:8px;">'
+                f'<div style="text-align: right; margin-bottom: 8px;">'
+                f'<a href="copy:{copy_key}" style="text-decoration:none;">'
+                f'<span style="color:{T["accent"]}; font-size:12px; background:{T["panel2"]}; '
+                f'padding:4px 10px; border-radius:6px; border:1px solid {T["border"]}; cursor:pointer;">'
+                f'📋 Copy</span></a>'
+                f'</div>'
+                f'{answer_html}'
+                f'</div>')
         self.chat.append(card)
         cur = self._cursor_end()
         self.chat.setTextCursor(cur)
         self.chat.ensureCursorVisible()
 
-        # Detect and show chart selector (NEW)
+        # Detect and show chart selector
         if result:
             try:
-                # Get the response text from result
                 response_text = str(result.get("answer", "") or result.get("text", "") or result)
                 extraction = ResponseDataExtractor.detect_numerical_data(response_text)
                 
@@ -1118,6 +1133,7 @@ class MainWindow(QMainWindow):
                     self.chart_selector.setVisible(False)
             except Exception:
                 self.chart_selector.setVisible(False)
+
 
     def _render_answer(self, result: dict) -> None:
         text = result.get("text", "") or ""
@@ -1184,6 +1200,24 @@ class MainWindow(QMainWindow):
 
     def _on_anchor(self, url) -> None:
         link = url.toString()
+        
+        # Handle copy button
+        if link.startswith("copy:"):
+            key = link  # e.g., "copy:1"
+            html_content = self._prov_store.get(key, "")
+            if html_content:
+                # Clean HTML tags
+                import re as _re
+                from html import unescape
+                text = _re.sub(r'<[^>]+>', '', html_content)
+                text = unescape(text)
+                
+                # Copy to clipboard
+                clipboard = QApplication.clipboard()
+                clipboard.setText(text)
+                self.status.showMessage("✓ Copied to clipboard!", 2000)
+            return
+        
         if link.startswith("opt:"):
             try:
                 _, gen_s, idx_s = link.split(":")
@@ -1206,10 +1240,10 @@ class MainWindow(QMainWindow):
             block = self._prov_store.pop(link[5:], None)
             if block:
                 self._append_html(
-                    f'<div style="color:{THEME["muted"]}; font-size:12px; '
+                    f'<div style="color:{self.current_theme["muted"]}; font-size:12px; '
                     f'margin:4px 0 8px 14px; padding:8px 12px; '
-                    f'background:{THEME["panel"]}; border-left:2px solid '
-                    f'{THEME["accent_dim"]}; border-radius:6px;">{block}</div>')
+                    f'background:{self.current_theme["panel"]}; border-left:2px solid '
+                    f'{self.current_theme["accent_dim"]}; border-radius:6px;">{block}</div>')
         elif link.startswith("chart:"):
             self._open_chart(link[6:])
         elif link.startswith("ask:"):
@@ -1259,20 +1293,22 @@ class MainWindow(QMainWindow):
 
     def _add_user_message(self, text: str) -> None:
         safe = html.escape(text)
+        T = self.current_theme
         self._append_html(
-            f'<div style="margin:10px 0 4px 0; display: flex; gap: 10px; justify-content: flex-end;">'
-            f'<div style="background:{self.current_theme["accent_dim"]}; color:#ffffff; '
-            f'padding:8px 14px; border-radius:14px; max-width:80%; text-align:left;">{safe}</div>'
-            f'<div style="font-size: 20px; min-width: 30px; text-align: right;">👤</div>'
+            f'<div style="margin:12px 0 8px 0; text-align: right;">'
+            f'<span style="background:{T["panel"]}; color:{T["text"]}; '
+            f'padding:12px 16px; border-radius:20px; display: inline-block; max-width:70%;">'
+            f'{safe} 👤'
+            f'</span>'
             f'</div>')
+        
 
     def _start_assistant_line(self) -> None:
+        T = self.current_theme
         self._append_html(
-            f'<div style="margin:8px 0 2px 0; display: flex; gap: 10px; align-items: center;">'
-            f'<div style="font-size: 20px;">🤖</div>'
-            f'<div style="color:{self.current_theme["accent"]}; font-weight:700; '
-            f'font-size:12px;">{html.escape(cfg.ASSISTANT_NAME)}</div>'
-            f'</div>')
+            f'<table width="100%"><tr><td style="width:100%; text-align: left;">'
+            f'<b style="color:{T["accent"]};">🤖 {html.escape(cfg.ASSISTANT_NAME)}</b>'
+            f'</td></tr></table>')
         
     def _append_image(self, png_bytes: bytes) -> None:
         image = QImage()
