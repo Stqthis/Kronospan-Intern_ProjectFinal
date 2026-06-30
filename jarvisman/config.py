@@ -75,6 +75,7 @@ EMBED_BATCH_SIZE = 16
 # --------------------------------------------------------------------------- #
 CHUNK_SIZE = 1000          # characters per chunk
 CHUNK_OVERLAP = 150        # characters of overlap between consecutive chunks
+RAG_TOP_K = 3              # Retrieve only top 3 most relevant chunks
 FETCH_K = 20               # candidates pulled from EACH retriever before fusion
 TOP_K = 5                  # chunks finally fed to the model
 MAX_CONTEXT_CHARS = 6000   # hard cap on context handed to the model
