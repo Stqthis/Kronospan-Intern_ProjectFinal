@@ -445,12 +445,28 @@ class Agent:
         """Decide the obvious cases without an LLM call. Returns a tool name,
         or None when the decision is ambiguous and the LLM router is needed."""
         ql = query.lower()
+
+        # Greetings / thanks / chitchat -> conversational reply, never the data
+        # pipeline. Exact-match (after stripping trailing !.?) so a real
+        # question like "high interest accounts" is never swallowed.
+        _q = ql.strip().rstrip("!.?")
+        _greetings = {
+            "hi", "hello", "hey", "yo", "hiya", "howdy", "sup",
+            "good morning", "good afternoon", "good evening",
+            "hi jarvis", "hello jarvis", "hey jarvis",
+            "how are you", "hows it going", "how's it going",
+            "whats up", "what's up",
+            "thanks", "thank you", "thx", "cheers", "ok thanks",
+            "who are you", "what can you do", "help",
+        }
+        if _q in _greetings:
+            return "chat"
+
         has_tables = bool(self.dataframes)
         has_index = self.rag.vector_store.count > 0
 
         # questions ABOUT the conversation itself go to chat (where history is
-        # available): "what did I ask before", "summarize our chat", "repeat
-        # your last answer", "what was my first question"
+        # available): "what did I ask before", "summarize our chat", etc.
         if self.history and any(p in ql for p in (
                 "what did i ask", "what did we", "my last question",
                 "my first question", "previous question", "earlier question",
@@ -461,19 +477,47 @@ class Agent:
 
         if not has_tables and not has_index:
             return "chat"  # nothing loaded
+
         if has_tables and any(h in ql for h in _PLOT_HINTS):
             return "plot"
+
         if has_index and any(s in ql for s in _DOC_SIGNALS) \
                 and not self._mentions_known_column(ql):
             # 'what does the report say about X' is a prose question even when
             # it contains words like 'total' -- unless a table column is named
             return "answer_docs"
+
+        # Strong data signal -> analyze (this runs BEFORE the conversational
+        # fallback, so a real question like "total funds for X" always wins).
         if has_tables and (
             any(h in ql for h in _ANALYZE_HINTS)
             or any(h in ql for h in _LOOKUP_HINTS)
             or self._mentions_known_column(ql)
         ):
             return "analyze"
+
+        # No data signal at all? Catch conversational sentences the exact-match
+        # greeting set misses ("Hello Jarvis, I have some questions", "can you
+        # help me"). Only fires when nothing above matched.
+        _has_data_signal = (
+            any(h in ql for h in _ANALYZE_HINTS)
+            or any(h in ql for h in _LOOKUP_HINTS)
+            or any(h in ql for h in _DOC_SIGNALS)
+            or self._mentions_known_column(ql)
+        )
+        if not _has_data_signal:
+            _greet_words = ("hi", "hello", "hey", "greetings", "good morning",
+                            "good afternoon", "good evening", "thanks", "thank")
+            _looks_conversational = (
+                any(_q.startswith(w) for w in _greet_words)
+                or "how are you" in _q
+                or "who are you" in _q
+                or "what can you do" in _q
+                or ("i have" in _q and "question" in _q)
+            )
+            if _looks_conversational:
+                return "chat"
+
         if has_tables and not has_index:
             return "analyze"  # only tables exist -> query them
         if has_index and not has_tables:
@@ -516,6 +560,7 @@ class Agent:
     # Dispatch                                                           #
     # ------------------------------------------------------------------ #
     def handle(self, query: str, *args, **kwargs):
+
         res = self._handle_inner(query, *args, **kwargs)
         try:
             opts = res.get("options") or []
@@ -660,8 +705,15 @@ class Agent:
             else:
                 if progress_callback:
                     progress_callback("Retrieving and answering ...")
-                answer, sources = self.rag.answer(query, token_callback=token_callback)
+                rag_result = self.rag.answer(query, token_callback=token_callback)
+                answer = rag_result.get("text", "")
+                sources = rag_result.get("sources", [])
                 result = self._text_result(answer, streamed=bool(token_callback), sources=sources)
+                # Add metadata to result
+                result["retrieval_time"] = rag_result.get("retrieval_time", 0)
+                result["llm_time"] = rag_result.get("llm_time", 0)
+                result["chunks_used"] = rag_result.get("chunks_used", 0)
+                result["confidence"] = rag_result.get("confidence", 0)
 
         result["tool"] = tool
         return result

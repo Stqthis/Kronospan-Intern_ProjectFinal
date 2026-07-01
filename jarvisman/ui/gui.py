@@ -1127,6 +1127,37 @@ class MainWindow(QMainWindow):
                 source_html += f'<br></span>'
             source_html += '</div>'
         
+        # Build metadata display
+        metadata_html = ""
+        retrieval_time = result.get("retrieval_time", 0)
+        llm_time = result.get("llm_time", 0)
+        chunks_used = result.get("chunks_used", 0)
+        confidence = result.get("confidence", 0)
+        
+        if retrieval_time or llm_time or chunks_used or confidence:
+            metadata_html = f'<div style="margin-top:8px; padding-top:8px; border-top: 1px solid {T["border"]};">'
+            metadata_html += f'<span style="color:{T["muted"]}; font-size:10px;">'
+            
+            if retrieval_time:
+                metadata_html += f'⏱️ {retrieval_time:.2f}s retrieval'
+            
+            if llm_time:
+                if retrieval_time:
+                    metadata_html += ' | '
+                metadata_html += f'⚡ {llm_time:.1f}s generation'
+            
+            if chunks_used:
+                if retrieval_time or llm_time:
+                    metadata_html += ' | '
+                metadata_html += f'📊 {chunks_used} chunk(s)'
+            
+            if confidence:
+                if retrieval_time or llm_time or chunks_used:
+                    metadata_html += ' | '
+                metadata_html += f'🎯 {int(confidence*100)}% match'
+            
+            metadata_html += '</span></div>'
+        
         card = (f'<div style="margin:12px 0 8px 0; padding:14px 16px; '
                 f'background:{T["panel"]}; border-radius:8px;">'
                 f'<div style="text-align: right; margin-bottom: 8px;">'
@@ -1137,6 +1168,7 @@ class MainWindow(QMainWindow):
                 f'</div>'
                 f'{answer_html}'
                 f'{source_html}'
+                f'{metadata_html}'
                 f'</div>')
         self.chat.append(card)
         cur = self._cursor_end()
@@ -1280,9 +1312,25 @@ class MainWindow(QMainWindow):
 
     def _on_answer_error(self, message: str) -> None:
         first = message.splitlines()[0] if message else "Unknown error"
-        self._append_html(
-            f'<span style="color:{THEME["err"]}">{html.escape(first)}</span>'
-            f'<div style="height:14px;"></div>')
+        T = self.current_theme
+        
+        # Style error as a prominent card
+        error_card = (f'<div style="margin:12px 0 8px 0; padding:12px 14px; '
+                    f'background:{T["panel"]}; border-left:4px solid {T["err"]}; '
+                    f'border-radius:8px; border: 1px solid {T["err"]};">'
+                    f'<div style="display: flex; gap: 8px; align-items: center;">'
+                    f'<span style="font-size: 18px;">⚠️</span>'
+                    f'<span style="color:{T["err"]}; font-weight: 600;">'
+                    f'Error</span>'
+                    f'</div>'
+                    f'<div style="color:{T["text"]}; margin-top: 6px; font-size: 13px;">'
+                    f'{html.escape(first)}'
+                    f'</div>'
+                    f'</div>')
+        self.chat.append(error_card)
+        cur = self._cursor_end()
+        self.chat.setTextCursor(cur)
+        self.chat.ensureCursorVisible()
 
     # ------------------------------------------------------------------ #
     def _render_welcome(self) -> None:

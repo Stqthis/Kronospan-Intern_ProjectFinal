@@ -18,9 +18,14 @@ from jarvisman.ingest.column_types import profile_and_apply, save_profile, load_
 from jarvisman.semantics.semantic_model import build_semantic_model, save_semantic_model, load_semantic_model
 
 GROUNDED_SYSTEM = (
-    "You are a helpful assistant answering questions about documents. "
-    "Use ONLY the provided context. If information is not in the context, "
-    "say so clearly. Be concise and factual."
+    "You are analyzing company financial data with multiple currencies (EUR and Local Currency). "
+    "When answering:\n"
+    "1. Clearly identify ALL columns you're summing (list them by name)\n"
+    "2. If multiple currencies exist, show totals in EACH currency separately\n"
+    "3. Show the company name and date range used\n"
+    "4. Show the calculation: which rows were included, which columns summed\n"
+    "5. If result is 0.00, explain why (e.g., 'No funds allocated', or 'Company not found in table')\n"
+    "6. Use ONLY provided context data"
 )
 
 
@@ -369,30 +374,63 @@ class RAGPipeline:
         k: Optional[int] = None,
         token_callback: Optional[Callable[[str], None]] = None,
     ):
-        hits = self.retrieve(query, k or cfg.TOP_K)
+        import time
+        
+        # Track retrieval time
+        retrieval_start = time.time()
+        hits = self.retrieve(query, k or cfg.RAG_TOP_K)
+        retrieval_time = time.time() - retrieval_start
+        
         if not hits:
             msg = "The indexed documents do not contain information relevant to that question."
             if token_callback:
                 token_callback(msg)
-            return msg, []
+            return {
+                "text": msg,
+                "sources": [],
+                "retrieval_time": retrieval_time,
+                "chunks_used": 0,
+                "confidence": 0.0,
+            }
         
         context, sources = self._build_context(hits)
         
-        # Use simple system prompt (NOT auto-generated)
+        # Calculate confidence (average score)
+        confidence = sum(hit.get("score", 0) for hit in hits) / len(hits) if hits else 0
+        
+        # Use simple system prompt
         messages = [
             {"role": "system", "content": GROUNDED_SYSTEM},
             {"role": "user", "content": f"Context excerpts:\n{context}\n\nQuestion: {query}"},
         ]
         
+        # Track LLM time
+        llm_start = time.time()
         text = self.ollama.chat(
             self.chat_model,
             messages,
-            options={"temperature": 0.2},
+            options={
+                "temperature": 0.2,
+                "num_predict": 300,
+                "top_k": 40,
+                "top_p": 0.9,
+            },
             stream=bool(token_callback),
             on_token=token_callback,
         )
+        llm_time = time.time() - llm_start
         
-        return text, sources
+        # Return dict with metadata
+        return {
+            "text": text,
+            "sources": sources,
+            "retrieval_time": retrieval_time,
+            "llm_time": llm_time,
+            "chunks_used": len(hits),
+            "confidence": confidence,
+        }
+        
+
     def _build_relationship_context(self) -> str:
         """Build context about available table relationships."""
         if not hasattr(self, 'relationships') or not self.relationships:
