@@ -47,8 +47,8 @@ EMBED_BATCH_SIZE = 16
 # --------------------------------------------------------------------------- #
 # Retrieval / chunking                                                        #
 # --------------------------------------------------------------------------- #
-CHUNK_SIZE = 100
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 150
 RAG_TOP_K = 5
 
 # Table profiling — accuracy mode. Profiling builds the per-column meaning map
