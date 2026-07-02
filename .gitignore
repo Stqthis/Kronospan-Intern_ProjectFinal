@@ -1,2 +1,7 @@
 __pycache__/
 *.pyc
+eval_questions.txt
+eval_run.txt
+*.pkl
+*.faiss
+__pycache__/
