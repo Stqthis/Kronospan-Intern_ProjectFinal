@@ -5,3 +5,4 @@ eval_run.txt
 *.pkl
 *.faiss
 __pycache__/
+test_funds.py
