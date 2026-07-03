@@ -22,7 +22,7 @@ from jarvisman import config as cfg
 
 _cache: dict = {"path": None, "mtime": None, "text": ""}
 
-MAX_RULES_CHARS = 2000   # keep the prompt overhead bounded
+MAX_RULES_CHARS = 6000   # keep the prompt overhead bounded
 
 
 def load_rules(path: str = None) -> str:
