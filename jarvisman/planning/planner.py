@@ -95,6 +95,11 @@ DATE RULES:
 - If the schema column description or label explicitly defines it as a date/timestamp field, convert referenced years, months, and quarters into date range barriers using the "between" operator.
 - If the schema column description or label defines it as an integer numeric period profile (e.g., YEAR, FISCAL_YEAR), use exact equality comparisons ("eq").
 - Match the schema profile types exactly as verified on load; do not infer type based solely on header string text guessing.
+- VALIDITY INTERVALS ("as at <date>", "as of <date>", "at the end of <month year>", "current at <date>"): when the table has a START date column and an END date column (e.g. Start_date / End_date), a row is valid at date D when START <= D AND (END >= D OR END is empty). Express this as TWO filters, NOT a made-up "validity_interval" object:
+    {"column": "<start col>", "op": "le", "value": "<D as YYYY-MM-DD>", "or_null": false},
+    {"column": "<end col>",   "op": "ge", "value": "<D as YYYY-MM-DD>", "or_null": true}
+  The "or_null": true on the END filter is REQUIRED — it keeps rows that are still active (empty end date). Do NOT filter on a report/snapshot date column for these questions.
+- CHANGES BETWEEN TWO DATES ("changes from <date A> to <date B>", "what changed between"): this compares validity at two points in time and CANNOT be expressed as simple filters. Set "requires_code": true and leave the query metrics empty.
 
 DERIVED METRICS & ALIAS SCOPE:
 - For "share of total" operations: Declare a derived object with kind="pct_of_total". Note that the proportional division is calculated relative to the entire column's total sum unless a sub-grouping context is explicitly required by the text.
@@ -176,6 +181,27 @@ User: "share of total revenue by country"
   "requires_code": false,
   "clarification": null,
   "intent_summary": "Calculate the proportional share of total revenue contributed by each individual country."
+}
+User: "who was a director as at 31 December 2023"
+{
+  "table": "<the table with director + Start_date/End_date columns>",
+  "join": null,
+  "filters": [
+    {"column": "Start_date", "op": "le", "value": "2023-12-31", "or_null": false},
+    {"column": "End_date", "op": "ge", "value": "2023-12-31", "or_null": true}
+  ],
+  "group_by": [],
+  "aggregations": [],
+  "having": [],
+  "derived": [],
+  "union": [],
+  "compare": null,
+  "select": ["DIRECTOR_NAME"],
+  "sort": null,
+  "limit": null,
+  "requires_code": false,
+  "clarification": null,
+  "intent_summary": "List directors whose validity interval includes 31 Dec 2023."
 }
 """
 

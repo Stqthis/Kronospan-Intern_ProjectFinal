@@ -6,3 +6,4 @@ eval_run.txt
 *.faiss
 __pycache__/
 test_funds.py
+test_funds.py
