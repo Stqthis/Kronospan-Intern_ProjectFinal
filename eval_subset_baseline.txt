@@ -1,0 +1,28 @@
+[ 1] FAIL  (analyze)  expected 105,247,755.84, got []
+       Q: What is the total of all type of funds of company Lignum Technologies 
+       got: Do you have data for Lignum Technologies AG in your spreadsheet as 'Lignum' might be a shortened name?
+<sandboxed-query>:13: UserWarning: This pattern is interpreted as a regular expression, and has match groups. To actually get the groups, use str.extract.
+[ 2] FAIL  (analyze)  expected 5,346,044.00, got [31.07, 2023.0, 1.0, -3.0, 1.0]
+       Q: What is the total of all type of funds in Euro (EUR) equivalent of all
+       trace: user chose an interpretation: 'eur' does NOT restrict rows: do NOT filter column 'CURRENCY'. Use the measure column 'AMOUNT EURO' of table 'CY01-DDR-3
+       trace: called the planner (1 LLM call)
+       trace: PLAN REJECTED -> falling through to codegen
+       trace:   planner proposed: {
+  "steps": [
+    {
+      "table": "CY05-Group_Company-09-2023-DATA.xlsx:CY05-Query",
+      "filter": {
+        "column": "COMPANY_COUNTRY_NAME",
+        "value": "Croatia"
+      },
+      "select": ["Code_Company"]
+    },
+    {
+      "table": "CY01-DDR-31-07-2023-DATA.xlsx:MATRIX",
+      "filter": 
+       got: [decision trace]
+  grounded values: 'Croatia', 'EUR', as-at 31.07.2023
+  auto-interpretation from question wording: 'eur
+[ 3] PASS  (analyze)  matched 27,010,703.00
+[ 4] MANUAL(analyze)  What is the total of all types of funds per Currency with th
+[ 5] MANUAL(analyze)  Descending sort all interest rates for all Funds in Denmark 

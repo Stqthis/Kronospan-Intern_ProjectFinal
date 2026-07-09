@@ -1636,6 +1636,11 @@ class MainWindow(QMainWindow):
             self._show_error(f"Could not open the chart: {type(exc).__name__}")
 
     def _get_stylesheet(self) -> str:
+        import os
+        _assets = os.path.join(os.path.dirname(__file__), "assets")
+        _chevron = os.path.join(
+            _assets, "chevron_dark.svg" if self.is_dark_theme else "chevron_light.svg"
+        ).replace("\\", "/")
         """Get stylesheet using current theme."""
         T = self.current_theme
         return f"""
@@ -1709,6 +1714,18 @@ class MainWindow(QMainWindow):
         }}
         QComboBox::down-arrow {{
             image: url(jarvisman/ui/assets/chevron_down.svg);
+            width: 12px; height: 12px;
+        }}
+        QComboBox::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: center right;
+            width: 26px;
+            border: none;
+            background: transparent;
+            margin-right: 4px;
+        }}
+        QComboBox::down-arrow {{
+            image: url({_chevron});
             width: 12px; height: 12px;
         }}
         """
