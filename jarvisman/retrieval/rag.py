@@ -219,8 +219,10 @@ class RAGPipeline:
                 # configured (llama3:70b writes better descriptions than the
                 # code model). Falls back to the chat model on single-model setups.
                 _enrich_model = cfg.model_for("understand", self.chat_model)
+                _prior_profile = load_profile(cfg.INDEX_DIR)
                 dataframes, self.table_profile = profile_and_apply(
-                    self.ollama, _enrich_model, dataframes, report
+                    self.ollama, _enrich_model, dataframes, report,
+                    existing=_prior_profile,
                 )
             
             report("Saving tables ...")

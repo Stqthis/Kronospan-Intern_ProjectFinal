@@ -41,7 +41,10 @@ EMBED_TIMEOUT = (10, 180)
 LIST_TIMEOUT = (5, 20)
 
 
-KEEP_ALIVE = os.environ.get("RAG_KEEP_ALIVE", "30m")
+# "-1" keeps the model pinned in memory (never unload) so answers never pay a
+# reload. There is ample unified memory to hold it; set a duration like "30m"
+# to release it when idle.
+KEEP_ALIVE = os.environ.get("RAG_KEEP_ALIVE", "-1")
 EMBED_BATCH_SIZE = 16
 
 # --------------------------------------------------------------------------- #
@@ -94,9 +97,40 @@ DATA_DIR = os.environ.get(
     "RAG_DATA_DIR", os.path.join(os.path.expanduser("~"), ".offline_rag_assistant")
 )
 INDEX_DIR = os.path.join(DATA_DIR, "index")
+# Persist solved query plans across restarts: a repeated/reworded question is
+# then answered with zero model calls. Keyed by (index version, question).
+PLAN_CACHE_PERSIST = os.environ.get("RAG_PLAN_CACHE_PERSIST", "1") == "1"
+PLAN_CACHE_PATH = os.path.join(INDEX_DIR, "plan_cache.json")
 EMBED_CACHE_PATH = os.path.join(DATA_DIR, "embed_cache.pkl")
 
 SUPPORTED_EXTENSIONS = (".pdf", ".xlsx", ".xls")
+
+# --------------------------------------------------------------------------- #
+# Excel ingestion (speed + accuracy)                                          #
+# --------------------------------------------------------------------------- #
+# Hard row cap per sheet. The old value (5000) silently truncated the daily
+# loan schedules (LTL ~78k rows, CY28 ~109k), which made "as at <date>" balances
+# wrong. Keep a high ceiling so real data is complete; lower it only on tiny
+# machines. Set 0 for "no limit".
+_excel_rows = int(os.environ.get("RAG_EXCEL_MAX_ROWS", "250000"))
+EXCEL_MAX_ROWS = None if _excel_rows <= 0 else _excel_rows
+
+# Sheets skipped at ingest time (case-insensitive). Derived pivots, per-country
+# breakdowns, CEO views, and password/helper tabs are not primary data and only
+# slow indexing and confuse table selection. Real data sheets (MATRIX,
+# CY05-Query, WCR MATRIX, LTL_Data, BIG DATA) are kept. All three lists are
+# comma-separated env-overridable.
+SKIP_SHEET_NAMES = [s.strip().lower() for s in os.environ.get(
+    "RAG_SKIP_SHEETS",
+    "password,index,query new,3mth exp,group-ceo,pivot input .v2").split(",") if s.strip()]
+SKIP_SHEET_PREFIXES = [s.strip().lower() for s in os.environ.get(
+    "RAG_SKIP_SHEET_PREFIXES", "p-").split(",") if s.strip()]
+SKIP_SHEET_SUBSTRINGS = [s.strip().lower() for s in os.environ.get(
+    "RAG_SKIP_SHEET_SUBSTR", "ceo,pivot").split(",") if s.strip()]
+# Content-based junk filter: a recovered table this wide with this few distinct
+# column base-names is a pivot dump, not data.
+DEGENERATE_MIN_WIDTH = int(os.environ.get("RAG_DEGENERATE_MIN_WIDTH", "8"))
+DEGENERATE_MAX_DISTINCT = int(os.environ.get("RAG_DEGENERATE_MAX_DISTINCT", "3"))
 
 # --------------------------------------------------------------------------- #
 # LLM context window                                                          #
@@ -113,8 +147,30 @@ VALUE_INDEX_MAX_CARDINALITY = int(
 RELATIONSHIP_MIN_COVERAGE = 0.95
 RELATIONSHIP_MAX_DISTINCT = 50000
 PLAN_TEMPERATURE = 0.0
+# A query plan is a small JSON object; cap generation so the model can't run
+# on past it. Raise via env if plans for very wide schemas get truncated.
+PLAN_NUM_PREDICT = int(os.environ.get("RAG_PLAN_NUM_PREDICT", "768"))
 PLAN_REPAIR_ATTEMPTS = 1
-SYNTHESIZE_ANSWER = os.environ.get("RAG_SYNTH", "0") == "1"
+# Phrase compact (scalar / few-row) results as a direct sentence instead of a
+# raw value, so "any changes?" gets a Yes/No + reason rather than a data dump.
+# Only fires for results <= SYNTHESIZE_MAX_ROWS and has a number-echo guard, so
+# figures are never invented. Set RAG_SYNTH=0 for maximum speed (raw results).
+SYNTHESIZE_ANSWER = os.environ.get("RAG_SYNTH", "1") == "1"
+# A phrased answer is 1-3 sentences; cap generation so decode stops early.
+SYNTH_NUM_PREDICT = int(os.environ.get("RAG_SYNTH_NUM_PREDICT", "220"))
+
+# --------------------------------------------------------------------------- #
+# UI animations                                                               #
+# --------------------------------------------------------------------------- #
+# Motion: sidebar slide, theme crossfade, row-by-row table reveal. Set
+# RAG_ANIMATIONS=0 to disable all motion (accessibility / low-power screens).
+ANIMATIONS = os.environ.get("RAG_ANIMATIONS", "1") == "1"
+ANIM_DURATION_MS = int(os.environ.get("RAG_ANIM_MS", "240"))
+ANIM_TABLE_INTERVAL_MS = int(os.environ.get("RAG_ANIM_ROW_MS", "45"))
+ANIM_TABLE_MAX_ROWS = int(os.environ.get("RAG_ANIM_MAX_ROWS", "60"))
+# Chart entrance animation (bars grow, pie sweeps, lines draw in).
+CHART_ANIM_FRAMES = int(os.environ.get("RAG_CHART_ANIM_FRAMES", "26"))
+CHART_ANIM_INTERVAL_MS = int(os.environ.get("RAG_CHART_ANIM_MS", "22"))
 SYNTHESIZE_MAX_ROWS = int(os.environ.get("RAG_SYNTH_MAX_ROWS", "3"))
 MAX_ANALYSIS_TABLES_REASONER = int(os.environ.get("RAG_MAX_TABLES", "6"))
 PROMPT_MEANING_MAX_CHARS = 80

@@ -20,8 +20,8 @@ class ChartTypeSelector(QWidget):
     def __init__(self, parent=None, theme: dict = None):
         super().__init__(parent)
         self.theme = theme or {
-            "bg": "#171c24", "panel": "#1f262f", "border": "#2a323d",
-            "text": "#e6edf3", "accent": "#4c9aff", "muted": "#8b97a5"
+            "bg": "#faf9f5", "panel": "#ffffff", "border": "#e3e0d6",
+            "text": "#2b2a27", "accent": "#c65d3b", "muted": "#6f6b60"
         }
         self.current_df = None
         self.available_charts = []
@@ -69,10 +69,10 @@ class ChartTypeSelector(QWidget):
                 font-weight: bold;
             }}
             QPushButton:hover {{
-                background: #5b9cff;
+                background: {self.theme.get('accent_hover', self.theme['accent'])};
             }}
             QPushButton:pressed {{
-                background: #3d7acc;
+                background: {self.theme.get('accent_hover', self.theme['accent'])};
             }}
             QPushButton:disabled {{
                 background: {self.theme['muted']};
@@ -167,8 +167,8 @@ class DataSummaryPanel(QFrame):
     def __init__(self, parent=None, theme: dict = None):
         super().__init__(parent)
         self.theme = theme or {
-            "bg": "#171c24", "panel": "#1f262f", "border": "#2a323d",
-            "text": "#e6edf3", "accent": "#4c9aff", "muted": "#8b97a5"
+            "bg": "#faf9f5", "panel": "#ffffff", "border": "#e3e0d6",
+            "text": "#2b2a27", "accent": "#c65d3b", "muted": "#6f6b60"
         }
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setLineWidth(1)

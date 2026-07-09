@@ -11,12 +11,13 @@ from jarvisman.runtime import numfmt
 
 CHART_TYPES = ("bar", "barh", "line", "area", "pie", "scatter")
 
-# A dark palette aligned with the app theme; the chart window passes its own.
+# Warm fallback aligned with the app's default (light) theme; callers such as
+# the chart window pass their own active theme, which takes precedence.
 DEFAULT_THEME = {
-    "bg": "#0f1419", "panel": "#171c24", "text": "#e6edf3",
-    "muted": "#8b97a5", "grid": "#2a323d", "accent": "#4c9aff",
-    "cycle": ["#4c9aff", "#3fb950", "#d29922", "#f85149", "#a371f7",
-              "#39c5cf", "#db61a2", "#e3b341", "#7ee787", "#ffa657"],
+    "bg": "#faf9f5", "panel": "#ffffff", "text": "#2b2a27",
+    "muted": "#6f6b60", "grid": "#e3e0d6", "accent": "#c65d3b",
+    "cycle": ["#c65d3b", "#3d8b52", "#b7791f", "#3a6ea5", "#8a5cae",
+              "#2f9488", "#c1567f", "#a8863f", "#5a9e64", "#d4834f"],
 }
 
 

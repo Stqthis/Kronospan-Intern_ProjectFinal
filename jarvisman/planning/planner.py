@@ -237,11 +237,18 @@ class Planner:
                 "JSON plan:")
 
     def _chat(self, system: str, user: str) -> str:
+        # A query plan is small JSON. Constraining decoding to JSON makes the
+        # model stop at the closing brace (no trailing prose to decode) and
+        # parse on the first try -- which removes the "reply with ONLY the
+        # JSON" re-ask round-trip on the failure path. num_predict caps the
+        # rare runaway. Both cut planning latency on large models.
         return self.ollama.chat(
             cfg.model_for("plan", self.chat_model),
             [{"role": "system", "content": system},
              {"role": "user", "content": user}],
-            options={"temperature": cfg.PLAN_TEMPERATURE},
+            options={"temperature": cfg.PLAN_TEMPERATURE,
+                     "num_predict": cfg.PLAN_NUM_PREDICT},
+            format="json",
         )
 
     # ------------------------------------------------------------------ #

@@ -8,7 +8,8 @@ from typing import Optional
 
 from PyQt6.QtGui import QClipboard
 
-from PyQt6.QtCore import Qt, QThreadPool, QTimer, QUrl
+from PyQt6.QtCore import (Qt, QThreadPool, QTimer, QUrl, QPropertyAnimation,
+                          QEasingCurve, QAbstractAnimation)
 from PyQt6.QtGui import QImage, QTextCursor, QTextDocument
 from PyQt6.QtWidgets import (
     QApplication,
@@ -18,6 +19,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QGraphicsOpacityEffect,
     QLineEdit,
     QListWidget,
     QMainWindow,
@@ -43,25 +45,30 @@ from jarvisman.ui.chart_selector import ChartTypeSelector, DataSummaryPanel
 # --------------------------------------------------------------------------- #
 # Theme: one palette drives the whole window via a Qt style sheet.            #
 # --------------------------------------------------------------------------- #
+# Claude-inspired warm palette: paper surfaces, ink text, and the
+# signature clay/terracotta accent. Mirrors ThemeManager.LIGHT_THEME
+# so first paint matches the default (light) theme.
 THEME = {
-    "bg": "#0f1419", 
-    "panel": "#171c24", 
-    "panel2": "#1f262f",
-    "border": "#2a323d", 
-    "text": "#e6edf3", 
-    "muted": "#8b97a5",
-    "accent": "#4c9aff", 
-    "accent_dim": "#2d5a88", 
-    "bot": "#1f262f",
-    "ok": "#3fb950", 
-    "err": "#f85149", 
-    "warn": "#d29922", 
-    "code_bg": "#11151a",
-    "grid": "#2a323d",
-    "cycle": [                          # ← ADD THIS WHOLE SECTION
-        "#4c9aff", "#3fb950", "#d29922", "#f85149", "#a371f7",
-        "#39c5cf", "#db61a2", "#e3b341", "#7ee787", "#ffa657"
-    ]
+        "bg": "#faf9f5",
+        "panel": "#ffffff",
+        "panel2": "#f0eee7",
+        "border": "#e3e0d6",
+        "text": "#2b2a27",
+        "muted": "#6f6b60",
+        "accent": "#c65d3b",
+        "accent_dim": "#f0d9cf",
+        "accent_text": "#ffffff",
+        "accent_hover": "#a84a2e",
+        "bot": "#ffffff",
+        "ok": "#3d8b52",
+        "err": "#c0392b",
+        "warn": "#b7791f",
+        "code_bg": "#f4f2ec",
+        "grid": "#e3e0d6",
+    "cycle": [
+        "#c65d3b", "#3d8b52", "#b7791f", "#3a6ea5", "#8a5cae",
+        "#2f9488", "#c1567f", "#a8863f", "#5a9e64", "#d4834f",
+    ],
 }
 
 # back-compat aliases (other modules/tests import these)
@@ -240,7 +247,10 @@ class MainWindow(QMainWindow):
         self._chart_seq = 0
         self._buf = None              # when a list, _append_html buffers into it
         self._sidebar_visible = True
-        self.is_dark_theme = True
+        self._sidebar_w = 340        # remembered expanded width
+        self._anims = []             # keep refs so animations aren't GC'd
+        self._pending_table = None   # table awaiting row-by-row reveal
+        self.is_dark_theme = False
         self.theme_manager = ThemeManager()
         self.current_theme = self.theme_manager.get_theme(self.is_dark_theme)
 
@@ -538,9 +548,96 @@ class MainWindow(QMainWindow):
         line.setFrameShape(QFrame.Shape.HLine)
         return line
 
+    def _run_anim(self, anim) -> None:
+        """Hold a reference (so it is not garbage-collected) and start it."""
+        self._anims = [a for a in getattr(self, "_anims", [])
+                       if a.state() == QAbstractAnimation.State.Running]
+        self._anims.append(anim)
+        anim.start()
+
     def _toggle_sidebar(self) -> None:
-        self._sidebar_visible = not self._sidebar_visible
-        self.sidebar.setVisible(self._sidebar_visible)
+        """Slide the left panel open/closed by animating its width."""
+        if not getattr(cfg, "ANIMATIONS", True):
+            self._sidebar_visible = not self._sidebar_visible
+            self.sidebar.setVisible(self._sidebar_visible)
+            self.sidebar.setMaximumWidth(16777215)
+            return
+        dur = getattr(cfg, "ANIM_DURATION_MS", 240)
+        if self._sidebar_visible:                       # collapse
+            w = self.sidebar.width() or self._sidebar_w
+            self._sidebar_w = w
+            self._sidebar_visible = False
+            self.sidebar.setMinimumWidth(0)
+            anim = QPropertyAnimation(self.sidebar, b"maximumWidth", self)
+            anim.setDuration(dur)
+            anim.setStartValue(w)
+            anim.setEndValue(0)
+            anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+            anim.finished.connect(
+                lambda: (not self._sidebar_visible) and self.sidebar.setVisible(False))
+            self._run_anim(anim)
+        else:                                           # expand
+            self._sidebar_visible = True
+            w = getattr(self, "_sidebar_w", 340)
+            self.sidebar.setMinimumWidth(0)
+            self.sidebar.setMaximumWidth(0)
+            self.sidebar.setVisible(True)
+            anim = QPropertyAnimation(self.sidebar, b"maximumWidth", self)
+            anim.setDuration(dur)
+            anim.setStartValue(0)
+            anim.setEndValue(w)
+            anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+            def _done():
+                self.sidebar.setMaximumWidth(16777215)
+                self.sidebar.setMinimumWidth(0)
+                self.sidebar.setVisible(True)
+            anim.finished.connect(_done)
+            self._run_anim(anim)
+
+    def _mini_table(self, headers, rows) -> str:
+        """Rebuild a compact HTML table from parsed headers/rows (for reveal)."""
+        h = "".join(f"<th>{html.escape(str(c))}</th>" for c in headers)
+        body = []
+        for r in rows:
+            cells = "".join(f"<td>{html.escape(str(c))}</td>" for c in r)
+            body.append(f"<tr>{cells}</tr>")
+        return (f"<table><thead><tr>{h}</tr></thead>"
+                f"<tbody>{''.join(body)}</tbody></table>")
+
+    def _flush_pending_table(self) -> None:
+        pend = getattr(self, "_pending_table", None)
+        self._pending_table = None
+        if pend:
+            self._reveal_table(pend[0], pend[1])
+
+    def _reveal_table(self, headers, rows) -> None:
+        """Write a table into the transcript row-by-row for a lively feel."""
+        if (not getattr(cfg, "ANIMATIONS", True) or len(rows) <= 1
+                or len(rows) > getattr(cfg, "ANIM_TABLE_MAX_ROWS", 60)):
+            self._append_html(self._styled_table(self._mini_table(headers, rows)))
+            return
+        self._rev_headers, self._rev_rows, self._rev_k = headers, rows, 0
+        cur = self._cursor_end()
+        self.chat.setTextCursor(cur)
+        self._rev_pos = cur.position()
+        self._rev_timer = QTimer(self)
+        self._rev_timer.timeout.connect(self._reveal_tick)
+        self._rev_timer.start(getattr(cfg, "ANIM_TABLE_INTERVAL_MS", 45))
+
+    def _reveal_tick(self) -> None:
+        self._rev_k += 1
+        k = self._rev_k
+        tbl = self._styled_table(self._mini_table(self._rev_headers, self._rev_rows[:k]))
+        cur = self.chat.textCursor()
+        cur.setPosition(self._rev_pos)
+        cur.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+        cur.removeSelectedText()
+        cur.insertHtml(tbl)
+        self.chat.setTextCursor(self._cursor_end())
+        self.chat.ensureCursorVisible()
+        if k >= len(self._rev_rows):
+            self._rev_timer.stop()
 
     def _toggle_advanced(self) -> None:
         show = not self.advanced_box.isVisible()
@@ -549,6 +646,32 @@ class MainWindow(QMainWindow):
         self.advanced_btn.setText(f"{arrow} " + _t("advanced"))
     
     def _toggle_theme(self) -> None:
+        """Crossfade to the other theme: snapshot the current window, swap the
+        theme underneath, then fade the snapshot out for a smooth transition."""
+        if not getattr(cfg, "ANIMATIONS", True):
+            self._apply_theme_swap()
+            return
+        try:
+            pix = self.grab()
+            overlay = QLabel(self)
+            overlay.setPixmap(pix)
+            overlay.setGeometry(self.rect())
+            overlay.raise_()
+            overlay.show()
+            eff = QGraphicsOpacityEffect(overlay)
+            overlay.setGraphicsEffect(eff)
+            self._apply_theme_swap()
+            anim = QPropertyAnimation(eff, b"opacity", self)
+            anim.setDuration(getattr(cfg, "ANIM_DURATION_MS", 240))
+            anim.setStartValue(1.0)
+            anim.setEndValue(0.0)
+            anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+            anim.finished.connect(overlay.deleteLater)
+            self._run_anim(anim)
+        except Exception:
+            self._apply_theme_swap()
+
+    def _apply_theme_swap(self) -> None:
         """Toggle between dark and light theme."""
         self.is_dark_theme = not self.is_dark_theme
         self.current_theme = self.theme_manager.get_theme(self.is_dark_theme)
@@ -576,6 +699,7 @@ class MainWindow(QMainWindow):
             html_content = html_content.replace(old_theme['accent_dim'], T['accent_dim'])
             html_content = html_content.replace(old_theme['panel2'], T['panel2'])
             html_content = html_content.replace(old_theme['border'], T['border'])
+            html_content = html_content.replace(old_theme['code_bg'], T['code_bg'])
             
             # Re-apply the updated HTML
             self.chat.setHtml(html_content)
@@ -671,10 +795,16 @@ class MainWindow(QMainWindow):
             self.chat.setVisible(True)
 
     # typing indicator
+    def _on_progress(self, msg: str) -> None:
+        """Capture the pipeline's current stage for the header indicator."""
+        self._current_stage = msg or ""
+        self.status.showMessage(msg)
+
     def _start_typing(self) -> None:
         from time import time
         self._typing_dots = 0
-        self._typing_start_time = time()  # ← ADD THIS
+        self._typing_start_time = time()
+        self._current_stage = ""
         if not hasattr(self, "_typing_timer"):
             self._typing_timer = QTimer(self)
             self._typing_timer.timeout.connect(self._tick_typing)
@@ -683,17 +813,19 @@ class MainWindow(QMainWindow):
 
     def _tick_typing(self) -> None:
         self._typing_dots = (self._typing_dots + 1) % 4
-        
-        # Calculate elapsed time if timer started
+
         elapsed = ""
         if hasattr(self, '_typing_start_time'):
             from time import time
             elapsed_sec = int(time() - self._typing_start_time)
             if elapsed_sec > 0:
                 elapsed = f" ({elapsed_sec}s)"
-        
+
         base = _t("thinking").format(name=cfg.ASSISTANT_NAME).rstrip(" .\u2026")
-        self.typing_label.setText(base + " " + "\u00b7" * self._typing_dots + elapsed)
+        dots = "\u00b7" * self._typing_dots
+        stage = (getattr(self, "_current_stage", "") or "").rstrip(" .\u2026")
+        stage_txt = f"  —  {stage}" if stage else ""
+        self.typing_label.setText(f"{base} {dots}{stage_txt}{elapsed}")
 
     def _stop_typing(self) -> None:
         if hasattr(self, "_typing_timer"):
@@ -712,6 +844,11 @@ class MainWindow(QMainWindow):
             self.health_dot.setToolTip("Connected to Ollama")
             self._system_line(_t("ready"), THEME["ok"])
             self._load_models()
+            try:                      # preload the model so the first answer is fast
+                warm = Worker(lambda: self.ollama.warmup(cfg.DEFAULT_CHAT_MODEL))
+                self.pool.start(warm)
+            except Exception:
+                pass
         else:
             self.health_dot.setStyleSheet(f"color:{THEME['err']}; font-size:12px;")
             self.health_dot.setToolTip("Ollama not reachable")
@@ -806,7 +943,7 @@ class MainWindow(QMainWindow):
         self._set_busy(True, "Indexing documents…")
         
         worker = Worker(self.rag.index_documents, list(self.pending_files))
-        worker.signals.progress.connect(lambda m: self.status.showMessage(m))
+        worker.signals.progress.connect(self._on_progress)
         worker.signals.result.connect(self._on_index_built)
         worker.signals.error.connect(self._on_index_error)
         worker.signals.finished.connect(lambda: self._set_busy(False))
@@ -900,22 +1037,23 @@ class MainWindow(QMainWindow):
         self._set_busy(True, "Working \u2026")
         worker = Worker(self.agent.handle, text)
         worker.signals.token.connect(self._append_token)
-        worker.signals.progress.connect(lambda m: self.status.showMessage(m))
+        worker.signals.progress.connect(self._on_progress)
         worker.signals.result.connect(self._on_answer)
         worker.signals.error.connect(self._on_answer_error)
         worker.signals.finished.connect(lambda: self._set_busy(False))
         self.pool.start(worker)
 
-    @staticmethod
-    def _md_to_html(text: str) -> str:
+    def _md_to_html(self, text: str) -> str:
         """Minimal markdown -> Qt-rich-text: paragraphs, line breaks, bold,
         inline code, bullets. Keeps the answer readable like a chat reply."""
         import re as _re
-        safe = html.escape(text)
+        T = self.current_theme
+        safe = html.escape(text, quote=False)
         safe = _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe)
         safe = _re.sub(r"`([^`]+)`",
-                       rf'<span style="background:{THEME["code_bg"]}; '
-                       rf'font-family:monospace;">\1</span>', safe)
+                       rf'<span style="background:{T["code_bg"]}; '
+                       rf'color:{T["accent"]}; font-family:monospace; '
+                       rf'padding:1px 4px; border-radius:4px;">\1</span>', safe)
         lines = []
         for ln in safe.split("\n"):
             s = ln.strip()
@@ -926,10 +1064,43 @@ class MainWindow(QMainWindow):
         return "<br>".join(lines)
 
     def _styled_table(self, table_html: str) -> str:
-        t = table_html.replace(
-            "<table", '<table border="0" cellspacing="0" cellpadding="6"', 1)
-        t = t.replace("<th", f'<th bgcolor="{self.current_theme["panel2"]}"')
-        return t
+        """Theme a pandas HTML table for the chat: bordered frame, shaded/bold
+        header, zebra body rows, right-aligned numbers. QTextBrowser renders
+        only HTML table attributes (not full CSS), so styling is set via
+        bgcolor/align/border directly. Falls back to the raw table on any
+        parsing hiccup so an odd table never breaks the answer."""
+        import re as _re
+        T = self.current_theme
+        try:
+            t = table_html.replace(
+                "<table",
+                f'<table border="1" bordercolor="{T["border"]}" cellspacing="0" '
+                f'cellpadding="7" width="100%"', 1)
+            t = t.replace("<th", f'<th bgcolor="{T["panel2"]}" align="left"')
+
+            def _align_cell(m):
+                inner = m.group(1)
+                plain = _re.sub(r"<[^>]+>", "", inner).strip()
+                probe = plain.replace(",", "").replace("%", "").replace("€", "").strip()
+                try:
+                    float(probe); align = "right"
+                except ValueError:
+                    align = "left"
+                return f'<td align="{align}">{inner}</td>'
+            t = _re.sub(r"<td[^>]*>(.*?)</td>", _align_cell, t, flags=_re.S)
+
+            parts = t.split("<tr")
+            out, body_i = [parts[0]], 0
+            for seg in parts[1:]:
+                if "<th" in seg:
+                    out.append("<tr" + seg)
+                else:
+                    shade = T["panel2"] if (body_i % 2) else T["panel"]
+                    out.append(f'<tr bgcolor="{shade}"' + seg)
+                    body_i += 1
+            return "".join(out)
+        except Exception:
+            return table_html.replace("<th", f'<th bgcolor="{T["panel2"]}"')
 
     @staticmethod
     def _parse_html_table(table_html: str):
@@ -984,11 +1155,12 @@ class MainWindow(QMainWindow):
         key = f"c{self._chart_seq}"
         title = (question or "Result").strip()
         self._chart_store[key] = (title, headers, rows)
+        T = self.current_theme
         self._append_html(
             f'<div style="margin:6px 0 2px 0;"><a href="chart:{key}" '
             f'style="text-decoration:none;">'
-            f'<span style="background:{THEME["panel2"]}; '
-            f'color:{THEME["accent"]}; border:1px solid {THEME["accent_dim"]}; '
+            f'<span style="background:{T["panel2"]}; '
+            f'color:{T["accent"]}; border:1px solid {T["accent"]}; '
             f'padding:5px 12px; border-radius:14px;">'
             f'{_t("visualize")}</span></a></div>')
 
@@ -1002,7 +1174,7 @@ class MainWindow(QMainWindow):
         try:
             from jarvisman.ui.chart_window import ChartWindow
             win = ChartWindow.from_table(title, headers, rows,
-                                         theme=THEME, parent=self)
+                                         theme=self.current_theme, parent=self)
             self._chart_windows.append(win)   # keep a ref so Qt won't GC it
             win.show()
         except Exception as exc:  # never let a chart failure break the chat
@@ -1011,10 +1183,11 @@ class MainWindow(QMainWindow):
     def _render_options(self, options: list) -> None:
         self._opt_gen = getattr(self, "_opt_gen", 0) + 1
         self._pending_options = list(options)
+        _T = self.current_theme
         chips = "&nbsp;".join(
             f'<a href="opt:{self._opt_gen}:{i}" style="text-decoration:none;">'
-            f'<span style="background:{THEME["accent_dim"]}; '
-            f'color:#ffffff; padding:5px 14px; border-radius:14px;">'
+            f'<span style="background:{_T["accent"]}; '
+            f'color:{_T["accent_text"]}; padding:5px 14px; border-radius:14px;">'
             f'{html.escape(o)}</span></a>'
             for i, o in enumerate(options))
         self._append_html(
@@ -1081,7 +1254,14 @@ class MainWindow(QMainWindow):
             self._append_html("".join(out))
             return True
 
-        # otherwise: a clean styled table under the heading
+        # otherwise: a clean styled table under the heading. With animations
+        # on, defer the table so it can be revealed row-by-row after the card
+        # is placed (see _flush_pending_table); the heading is shown now.
+        if (getattr(cfg, "ANIMATIONS", True)
+                and 1 < len(rows) <= getattr(cfg, "ANIM_TABLE_MAX_ROWS", 60)):
+            self._pending_table = (headers, rows)
+            self._append_html("".join(out))
+            return True
         out.append(self._styled_table(th))
         self._append_html("".join(out))
         return True
@@ -1113,7 +1293,7 @@ class MainWindow(QMainWindow):
         sources = result.get("sources") or []
         if sources:
             source_html = f'<div style="margin-top:12px; padding-top:10px; border-top: 1px solid {T["border"]};">'
-            source_html += f'<span style="color:{T["muted"]}; font-size:11px;"><b>📊 Sources:</b></span><br>'
+            source_html += f'<span style="color:{T["muted"]}; font-size:11px;"><b>Sources</b></span><br>'
             for source in sources:
                 file_name = source.get("source", "Unknown")
                 location = source.get("location", "")
@@ -1139,22 +1319,22 @@ class MainWindow(QMainWindow):
             metadata_html += f'<span style="color:{T["muted"]}; font-size:10px;">'
             
             if retrieval_time:
-                metadata_html += f'⏱️ {retrieval_time:.2f}s retrieval'
+                metadata_html += f'{retrieval_time:.2f}s retrieval'
             
             if llm_time:
                 if retrieval_time:
                     metadata_html += ' | '
-                metadata_html += f'⚡ {llm_time:.1f}s generation'
+                metadata_html += f'{llm_time:.1f}s generation'
             
             if chunks_used:
                 if retrieval_time or llm_time:
                     metadata_html += ' | '
-                metadata_html += f'📊 {chunks_used} chunk(s)'
+                metadata_html += f'{chunks_used} chunk(s)'
             
             if confidence:
                 if retrieval_time or llm_time or chunks_used:
                     metadata_html += ' | '
-                metadata_html += f'🎯 {int(confidence*100)}% match'
+                metadata_html += f'{int(confidence*100)}% match'
             
             metadata_html += '</span></div>'
         
@@ -1164,7 +1344,7 @@ class MainWindow(QMainWindow):
                 f'<a href="copy:{copy_key}" style="text-decoration:none;">'
                 f'<span style="color:{T["accent"]}; font-size:12px; background:{T["panel2"]}; '
                 f'padding:4px 10px; border-radius:6px; border:1px solid {T["border"]}; cursor:pointer;">'
-                f'📋 Copy</span></a>'
+                f'Copy</span></a>'
                 f'</div>'
                 f'{answer_html}'
                 f'{source_html}'
@@ -1174,6 +1354,7 @@ class MainWindow(QMainWindow):
         cur = self._cursor_end()
         self.chat.setTextCursor(cur)
         self.chat.ensureCursorVisible()
+        self._flush_pending_table()
 
         # Detect and show chart selector
         if result:
@@ -1346,6 +1527,11 @@ class MainWindow(QMainWindow):
         cur = self.chat.textCursor()
         cur.movePosition(QTextCursor.MoveOperation.End)
         return cur
+    
+    def _scroll_to_bottom(self) -> None:
+        """Pin the chat view to the true bottom on every append."""
+        bar = self.chat.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def _append_html(self, fragment: str) -> None:
         if self._buf is not None:
@@ -1355,6 +1541,7 @@ class MainWindow(QMainWindow):
         cur = self._cursor_end()
         self.chat.setTextCursor(cur)
         self.chat.ensureCursorVisible()
+        self._scroll_to_bottom()
 
     def _append_token(self, text: str) -> None:
         if not text:
@@ -1363,24 +1550,26 @@ class MainWindow(QMainWindow):
         cur.insertText(text)
         self.chat.setTextCursor(cur)
         self.chat.ensureCursorVisible()
+        self._scroll_to_bottom()
 
     def _add_user_message(self, text: str) -> None:
-        safe = html.escape(text)
+        safe = html.escape(text, quote=False)
         T = self.current_theme
         self._append_html(
-            f'<div style="margin:12px 0 8px 0; text-align: right;">'
-            f'<span style="background:{T["panel"]}; color:{T["text"]}; '
-            f'padding:12px 16px; border-radius:20px; display: inline-block; max-width:70%;">'
-            f'{safe} 👤'
+            f'<div style="margin:16px 0 8px 0; text-align: right;">'
+            f'<span style="background:{T["accent_dim"]}; color:{T["text"]}; '
+            f'padding:11px 16px; border-radius:18px; display: inline-block; '
+            f'max-width:72%; text-align:left;">'
+            f'{safe}'
             f'</span>'
             f'</div>')
-        
+
 
     def _start_assistant_line(self) -> None:
         T = self.current_theme
         self._append_html(
             f'<table width="100%"><tr><td style="width:100%; text-align: left;">'
-            f'<b style="color:{T["accent"]};">🤖 {html.escape(cfg.ASSISTANT_NAME)}</b>'
+            f'<b style="color:{T["accent"]};">◆&nbsp; {html.escape(cfg.ASSISTANT_NAME)}</b>'
             f'</td></tr></table>')
         
     def _append_image(self, png_bytes: bytes) -> None:
@@ -1399,13 +1588,14 @@ class MainWindow(QMainWindow):
             f'<br><img src="{url.toString()}" width="{width}"><br>')
 
     def _append_code(self, code: str) -> None:
-        escaped = html.escape(code)
+        escaped = html.escape(code, quote=False)
+        T = self.current_theme
         self._append_html(
-            f'<div style="color:{THEME["muted"]}; font-size:11px; '
+            f'<div style="color:{T["muted"]}; font-size:11px; '
             f'margin-top:8px;">Generated code</div>'
-            f'<pre style="background:{THEME["code_bg"]}; color:#d6dee8; '
+            f'<pre style="background:{T["code_bg"]}; color:{T["text"]}; '
             f'padding:10px 12px; border-radius:8px; font-size:12px; '
-            f'white-space:pre-wrap; border:1px solid {THEME["border"]};">'
+            f'white-space:pre-wrap; border:1px solid {T["border"]};">'
             f'{escaped}</pre>')
 
     # ------------------------------------------------------------------ #
@@ -1432,38 +1622,29 @@ class MainWindow(QMainWindow):
         self.status.showMessage(first, 6000)
 
     def _on_chart_visualization_requested(self, chart_type: str, df) -> None:
-        """Generate and display interactive chart when user selects from dropdown."""
-        if df is None or df.empty:
+        """Render the chosen chart inline as a themed PNG. Uses the offline
+        matplotlib engine (charting.py) and embeds the image the same way the
+        rest of the app does -- no browser, no JavaScript, no network."""
+        if df is None or getattr(df, "empty", True):
             self._show_error("No data available for visualization")
             return
-        
         try:
-            from jarvisman.ui.interactive_charts import InteractiveCharts
-            import plotly.io as pio
-            
-            # Get chart
-            fig = InteractiveCharts.get_chart(chart_type, df)
-            
-            if fig is None:
-                self._show_error(f"Cannot create {chart_type} chart with this data")
-                return
-            
-            # Convert to HTML (interactive, no Chrome needed!)
-            html = pio.to_html(fig, include_plotlyjs='cdn', div_id="chart")
-            
-            # Display in chat
-            self.chat.insertHtml(html)
-            cur = self._cursor_end()
-            self.chat.setTextCursor(cur)
-            self.chat.ensureCursorVisible()
-            
-            self._append_html('<div style="height:14px;"></div>')
-            
-        except Exception as e:
-            import traceback
-            error_msg = f"Chart error: {str(e)}"
-            print(f"Full error:\n{traceback.format_exc()}")
-            self._show_error(error_msg)
+            from jarvisman.ui import charting
+            from jarvisman.ui.chart_window import ChartWindow
+            ct = (chart_type or "bar").lower().strip()
+            ct = "pie" if ct == "donut" else ct            # no donut engine
+            if ct not in charting.CHART_TYPES:
+                ct = "bar"
+            title = getattr(self, "_last_question", "") or "Chart"
+            win = ChartWindow(title, df, theme=self.current_theme, parent=self)
+            win.type_combo.setCurrentText(ct)              # triggers an animated re-plot
+            win.show()
+            win.raise_()
+            # keep a reference so the window is not garbage-collected
+            self._chart_windows = getattr(self, "_chart_windows", [])
+            self._chart_windows.append(win)
+        except Exception as exc:
+            self._show_error(f"Could not open the chart: {type(exc).__name__}")
 
     def _get_stylesheet(self) -> str:
         """Get stylesheet using current theme."""
@@ -1479,21 +1660,21 @@ class MainWindow(QMainWindow):
             border-radius: 12px; }}
         QFrame#sep {{ background: {T['border']}; max-height: 1px; border: none; }}
         QComboBox, QLineEdit {{ background: {T['panel2']}; color: {T['text']};
-            border: 1px solid {T['border']}; border-radius: 8px;
-            padding: 7px 10px; selection-background-color: {T['accent_dim']}; }}
+            border: 1px solid {T['border']}; border-radius: 12px;
+            padding: 8px 12px; selection-background-color: {T['accent_dim']}; }}
         QComboBox:focus, QLineEdit:focus {{ border: 1px solid {T['accent']}; }}
         QComboBox QAbstractItemView {{ background: {T['panel2']};
             color: {T['text']}; selection-background-color: {T['accent_dim']};
             border: 1px solid {T['border']}; outline: none; }}
         QPushButton {{ background: {T['panel2']}; color: {T['text']};
-            border: 1px solid {T['border']}; border-radius: 8px;
+            border: 1px solid {T['border']}; border-radius: 10px;
             padding: 8px 14px; }}
         QPushButton:hover {{ border: 1px solid {T['accent']}; }}
         QPushButton:disabled {{ color: {T['muted']}; }}
-        QPushButton#primary {{ background: {T['accent']}; color: {T['text']};
+        QPushButton#primary {{ background: {T['accent']}; color: {T['accent_text']};
             border: none; font-weight: 700; padding: 8px 14px; }}
-        QPushButton#primary:hover {{ background: {T['accent']}; opacity: 0.8; }}
-        QPushButton#primary:disabled {{ background: {T['muted']};
+        QPushButton#primary:hover {{ background: {T['accent_hover']}; }}
+        QPushButton#primary:disabled {{ background: {T['panel2']};
             color: {T['muted']}; }}
         QToolButton {{ background: transparent; color: {T['muted']};
             border: none; font-size: 18px; padding: 2px 6px; }}
@@ -1514,11 +1695,11 @@ class MainWindow(QMainWindow):
         QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
         QStatusBar {{ background: {T['panel']}; color: {T['muted']}; }}
         QSplitter::handle {{ background: {T['border']}; }}
-        QPushButton#chip {{ background: {T['panel2']}; color: {T['text']};
-            border: 1px solid {T['border']}; border-radius: 16px;
-            padding: 9px 16px; text-align: center; }}
+        QPushButton#chip {{ background: {T['panel']}; color: {T['text']};
+            border: 1px solid {T['border']}; border-radius: 14px;
+            padding: 11px 18px; text-align: center; }}
         QPushButton#chip:hover {{ border: 1px solid {T['accent']};
-            color: {T['accent']}; }}
+            color: {T['accent']}; background: {T['accent_dim']}; }}
         QToolButton#advanced {{ color: {T['muted']}; font-size: 12px;
             padding: 2px 0; }}
         QToolButton#advanced:hover {{ color: {T['accent']}; }}
@@ -1526,7 +1707,8 @@ class MainWindow(QMainWindow):
             background: {T['panel']}; border: 1px solid {T['border']};
             border-radius: 10px; padding: 3px 10px; }}
         QLabel#warn {{ color: {T['warn']}; font-size: 11px; }}
-        QLabel#hero {{ color: {T['text']}; font-size: 25px; font-weight: 800; }}
+        QLabel#hero {{ color: {T['text']}; font-size: 30px; font-weight: 500;
+            font-family: 'Georgia', 'Times New Roman', serif; }}
         QLabel#herosub {{ color: {T['muted']}; font-size: 16px; }}
         QLabel#heromark {{ color: {T['accent']}; font-size: 30px; }}
         QLabel#suggest {{ color: {T['muted']}; font-size: 12px; }}

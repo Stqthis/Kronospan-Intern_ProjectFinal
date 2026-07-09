@@ -5,37 +5,45 @@ class ThemeManager:
     """Manage light and dark themes."""
     
     DARK_THEME = {
-        "bg": "#0f1419",
-        "panel": "#171c24",
-        "panel2": "#1f262f",
-        "border": "#2a323d",
-        "text": "#e6edf3",
-        "muted": "#8b97a5",
-        "accent": "#4c9aff",
-        "accent_dim": "#2d5a88",
-        "bot": "#1f262f",
-        "ok": "#3fb950",
-        "err": "#f85149",
-        "warn": "#d29922",
-        "code_bg": "#11151a",
-        "grid": "#2a323d",
+        "bg": "#262624",
+        "panel": "#30302e",
+        "panel2": "#3a3a37",
+        "border": "#454440",
+        "text": "#f5f4ee",
+        "muted": "#b0aea3",
+        "accent": "#d97757",
+        "accent_dim": "#5c3d30",
+        "accent_text": "#ffffff",
+        "accent_hover": "#c15f3c",
+        "bot": "#30302e",
+        "ok": "#7fb069",
+        "err": "#e0776a",
+        "warn": "#d9a441",
+        "code_bg": "#1c1c1a",
+        "grid": "#454440",
+        "cycle": ["#d97757", "#7fb069", "#d9a441", "#6b9bd1", "#b58bc4",
+                  "#5fb0a8", "#d98ca8", "#c9a96a", "#8fbf7f", "#e0a06b"],
     }
-    
+
     LIGHT_THEME = {
-        "bg": "#ffffff",
-        "panel": "#f6f8fa",
-        "panel2": "#eaeef2",
-        "border": "#d0d7de",
-        "text": "#24292f",
-        "muted": "#57606a",
-        "accent": "#0969da",
-        "accent_dim": "#54aeff",
-        "bot": "#f6f8fa",
-        "ok": "#1a7f37",
-        "err": "#da3633",
-        "warn": "#9e6a03",
-        "code_bg": "#f6f8fa",
-        "grid": "#d0d7de",
+        "bg": "#faf9f5",
+        "panel": "#ffffff",
+        "panel2": "#f0eee7",
+        "border": "#e3e0d6",
+        "text": "#2b2a27",
+        "muted": "#6f6b60",
+        "accent": "#c65d3b",
+        "accent_dim": "#f0d9cf",
+        "accent_text": "#ffffff",
+        "accent_hover": "#a84a2e",
+        "bot": "#ffffff",
+        "ok": "#3d8b52",
+        "err": "#c0392b",
+        "warn": "#b7791f",
+        "code_bg": "#f4f2ec",
+        "grid": "#e3e0d6",
+        "cycle": ["#c65d3b", "#3d8b52", "#b7791f", "#3a6ea5", "#8a5cae",
+                  "#2f9488", "#c1567f", "#a8863f", "#5a9e64", "#d4834f"],
     }
     
     @staticmethod
@@ -69,7 +77,7 @@ class ThemeManager:
                 font-weight: bold;
             }}
             QPushButton:hover {{
-                background-color: {theme['accent_dim']};
+                background-color: {theme['accent_hover']};
             }}
             QPushButton:pressed {{
                 opacity: 0.8;

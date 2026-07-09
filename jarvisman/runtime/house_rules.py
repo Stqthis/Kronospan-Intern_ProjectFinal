@@ -22,13 +22,22 @@ from jarvisman import config as cfg
 
 _cache: dict = {"path": None, "mtime": None, "text": ""}
 
+# Shipped defaults, tuned to the deployment's data shapes. Used only when the
+# owner has not created their own rules file, so it is a safe starting point
+# that any deployment can override or delete.
+_DEFAULT_RULES_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "default_rules.txt")
+
 MAX_RULES_CHARS = 6000   # keep the prompt overhead bounded
 
 
 def load_rules(path: str = None) -> str:
     """The raw rule lines (comments/blanks removed), or ''. mtime-cached."""
     p = path or getattr(cfg, "HOUSE_RULES_PATH", "")
-    if not p:
+    # Fall back to the shipped defaults when no user rules file exists yet.
+    if not p or not os.path.exists(p):
+        p = _DEFAULT_RULES_PATH
+    if not p or not os.path.exists(p):
         return ""
     try:
         mtime = os.path.getmtime(p)

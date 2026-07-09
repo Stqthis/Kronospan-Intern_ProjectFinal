@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -112,6 +113,7 @@ def _profile_one(ollama, chat_model: str, name: str, df) -> dict:
         raw = ollama.chat(
             chat_model, [{"role": "user", "content": _prompt(name, df)}],
             options={"temperature": 0.0, "num_ctx": 8192},
+            format="json",
         )
     except Exception:
         raw = ""
@@ -230,8 +232,21 @@ def _coerce_column(col, verdict: Optional[dict], pd):
 # --------------------------------------------------------------------------- #
 # Public entry point                                                          #
 # --------------------------------------------------------------------------- #
+def _schema_sig(df) -> str:
+    """Stable signature of a table's raw shape: ordered (column, dtype) pairs.
+    Uses hashlib so the value is identical across processes/runs (the builtin
+    hash() is per-process salted and would never match a persisted one)."""
+    try:
+        parts = [f"{c}:{df[c].dtype}" for c in df.columns]
+        payload = "|".join(parts) + f"#rows>0={len(df) > 0}"
+        return hashlib.md5(payload.encode("utf-8")).hexdigest()
+    except Exception:
+        return ""
+
+
 def profile_and_apply(ollama, chat_model: str, dataframes: dict,
-                      progress: Optional[Callable[[str], None]] = None) -> tuple[dict, dict]:
+                      progress: Optional[Callable[[str], None]] = None,
+                      existing: Optional[dict] = None) -> tuple[dict, dict]:
     """For every table: the model reads the sample rows and decides each column's
     type + format + meaning; the code applies the types and keeps the meanings.
 
@@ -252,7 +267,16 @@ def profile_and_apply(ollama, chat_model: str, dataframes: dict,
             profile[name] = {"summary": "", "columns": {}}
             continue
 
-        prof = _profile_one(ollama, chat_model, name, df)
+        sig = _schema_sig(df)
+        prior = (existing or {}).get(name) or {}
+        if sig and prior.get("schema_hash") == sig and prior.get("columns"):
+            # unchanged schema -> reuse the saved understanding (0 LLM calls)
+            if progress:
+                progress(f"Reusing profile for unchanged table: {name}")
+            prof = prior
+        else:
+            prof = _profile_one(ollama, chat_model, name, df)
+            prof["schema_hash"] = sig
         verdicts = prof.get("columns", {})
 
         typed = df.copy()

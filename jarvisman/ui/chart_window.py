@@ -15,11 +15,14 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QVBoxLayout,
 )
+from PyQt6.QtCore import QTimer
 from matplotlib.backends.backend_qtagg import (
     FigureCanvasQTAgg,
     NavigationToolbar2QT,
 )
 from matplotlib.figure import Figure
+from matplotlib.animation import FuncAnimation
+from matplotlib.patches import Rectangle, Wedge
 
 from jarvisman import config as cfg
 from jarvisman.runtime import numfmt
@@ -36,6 +39,8 @@ class ChartWindow(QDialog):
         self.setWindowTitle(("Chart \u2014 " + self._title)[:90])
         self.resize(860, 580)
         self._annot = None
+        self._anim = None
+        self._anim_token = 0
         self._build()
         self._replot()
 
@@ -146,9 +151,92 @@ class ChartWindow(QDialog):
 
     def _replot(self) -> None:
         self._annot = None
+        self._stop_anim()
         charting.render(self.fig, self.df, self._spec(), self.theme,
                         title=self._title)
-        self.canvas.draw_idle()
+        if getattr(cfg, "ANIMATIONS", True):
+            self._animate_entrance()
+        else:
+            self.canvas.draw_idle()
+
+    def _stop_anim(self) -> None:
+        try:
+            if self._anim is not None:
+                self._anim.event_source.stop()
+        except Exception:
+            pass
+        self._anim = None
+        self._anim_token += 1   # invalidate any pending finalizer
+
+    def _animate_entrance(self) -> None:
+        """Grow/sweep/draw the freshly-rendered chart in. Fully guarded: any
+        hiccup falls back to a static draw so a chart never fails to show."""
+        try:
+            ax = self.fig.axes[0] if self.fig.axes else None
+            if ax is None:
+                self.canvas.draw_idle()
+                return
+            horizontal = self._spec().chart_type == "barh"
+            rects = [(r, r.get_height(), r.get_width())
+                     for r in ax.patches if isinstance(r, Rectangle)]
+            wedges = [(w, w.theta1, w.theta2)
+                      for w in ax.patches if isinstance(w, Wedge)]
+            lines = [(ln, list(ln.get_xdata()), list(ln.get_ydata()))
+                     for ln in ax.lines]
+            colls = [(c, c.get_alpha() if c.get_alpha() is not None else 1.0)
+                     for c in ax.collections]
+            texts = [(t, t.get_alpha() if t.get_alpha() is not None else 1.0)
+                     for t in ax.texts]
+            if not (rects or wedges or lines or colls):
+                self.canvas.draw_idle()
+                return
+
+            def _ease(t):
+                return t * t * (3.0 - 2.0 * t)          # smoothstep
+
+            def _set(t):
+                for r, h, w in rects:
+                    if horizontal:
+                        r.set_width(w * t)
+                    else:
+                        r.set_height(h * t)
+                for wd, a1, a2 in wedges:
+                    wd.set_theta2(a1 + (a2 - a1) * t)
+                for ln, xs, ys in lines:
+                    n = max(1, int(len(xs) * t)) if xs else 0
+                    ln.set_data(xs[:n], ys[:n])
+                for c, a in colls:
+                    c.set_alpha(a * t)
+                for tx, a in texts:
+                    tx.set_alpha(a * t)
+
+            frames = max(2, int(getattr(cfg, "CHART_ANIM_FRAMES", 26)))
+            interval = int(getattr(cfg, "CHART_ANIM_INTERVAL_MS", 22))
+            _set(0.0)
+            token = self._anim_token
+
+            def _frame(i):
+                # the final frame lands exactly on the full state
+                t = 1.0 if i >= frames - 1 else _ease((i + 1) / frames)
+                _set(t)
+                return []
+
+            self._anim = FuncAnimation(
+                self.fig, _frame, frames=frames,
+                interval=interval, blit=False, repeat=False)
+            self.canvas.draw_idle()
+
+            def _finalize():
+                # snap to the exact final state unless a re-plot superseded us
+                if self._anim_token == token:
+                    _set(1.0)
+                    self.canvas.draw_idle()
+            QTimer.singleShot(frames * interval + 150, _finalize)
+        except Exception:
+            try:
+                self.canvas.draw_idle()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ #
     def _on_hover(self, event) -> None:

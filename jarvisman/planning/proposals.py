@@ -78,7 +78,8 @@ def propose_alternative(ollama, chat_model: str, question: str,
             cfg.model_for("propose", chat_model),
             [{"role": "system", "content": _PROPOSE_SYSTEM},
              {"role": "user", "content": user}],
-            options={"temperature": 0.3},
+            options={"temperature": 0.3, "num_predict": 300},
+            format="json",
         )
     except Exception:
         return None

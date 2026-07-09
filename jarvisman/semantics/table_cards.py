@@ -180,6 +180,7 @@ def generate_card(ollama, chat_model: str, table_name: str,
             [{"role": "system", "content": _CARD_PROMPT},
              {"role": "user", "content": f"Table:\n{schema_block}\n\nJSON:"}],
             options={"temperature": 0.0},
+            format="json",
         )
         return extract_json(out)
     except Exception:

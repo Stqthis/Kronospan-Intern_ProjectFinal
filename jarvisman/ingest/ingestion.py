@@ -372,14 +372,56 @@ def _strip_text_cells(df: "pd.DataFrame") -> "pd.DataFrame":
     return df
 
 
+def _skip_sheet(name: str) -> bool:
+    """True for sheets that are derived views / helpers, not primary data."""
+    n = str(name).strip().lower()
+    if not n:
+        return True
+    if n in getattr(cfg, "SKIP_SHEET_NAMES", []):
+        return True
+    if any(n.startswith(p) for p in getattr(cfg, "SKIP_SHEET_PREFIXES", [])):
+        return True
+    if any(s in n for s in getattr(cfg, "SKIP_SHEET_SUBSTRINGS", [])):
+        return True
+    return False
+
+
+def _is_degenerate_table(df) -> bool:
+    """A recovered table with almost no distinct column names is a pivot dump
+    (e.g. columns 'TRADING COMPANIES', 'TRADING COMPANIES.1', ...), not data.
+    Runs on the RECOVERED header, where such sheets collapse to 1-3 bases."""
+    try:
+        cols = [str(c) for c in df.columns]
+    except Exception:
+        return False
+    width = len(cols)
+    if width == 0:
+        return True
+    bases, placeholders = set(), 0
+    for c in cols:
+        b = re.sub(r"\.\d+$", "", c).strip()
+        if (not b) or re.fullmatch(r"col_\d+", b) or b.lower().startswith("unnamed"):
+            placeholders += 1
+            continue
+        bases.add(b.lower())
+    if placeholders >= 0.6 * width:
+        return True
+    if (width >= getattr(cfg, "DEGENERATE_MIN_WIDTH", 8)
+            and len(bases) <= getattr(cfg, "DEGENERATE_MAX_DISTINCT", 3)):
+        return True
+    return False
+
+
 def load_excel(path: str) -> Tuple[list[dict], dict]:
     """Excel -> {'file:sheet': DataFrame}; with debugging and engine handling."""
     name = os.path.basename(path)
     print(f"\n📄 Loading Excel: {name}")
     
-    # Limit rows for speed
-    MAX_ROWS = 5000
-    
+    # High row ceiling (None = no limit): the loan schedules have 78k-109k rows
+    # and an "as at <date>" balance needs all of them. Junk sheets are skipped
+    # up front so this stays fast despite the larger cap.
+    MAX_ROWS = getattr(cfg, "EXCEL_MAX_ROWS", 250000)
+
     # Determine engine based on file extension
     if path.lower().endswith('.xlsx') or path.lower().endswith('.xlsm'):
         engine = 'openpyxl'
@@ -387,16 +429,25 @@ def load_excel(path: str) -> Tuple[list[dict], dict]:
         engine = 'xlrd'
     else:
         engine = None  # Let pandas figure it out
-    
+
+    # Only read the sheets that hold primary data.
+    try:
+        with pd.ExcelFile(path, engine=engine) as _xl:
+            all_names = list(_xl.sheet_names)
+    except Exception as e:
+        print(f"  ❌ Error reading file: {e}")
+        return [], {}
+    keep = [s for s in all_names if not _skip_sheet(s)] or all_names
+    dropped = [s for s in all_names if s not in keep]
+    if dropped:
+        print(f"  Skipping non-data sheets: {dropped}")
+
     try:
         raw_sheets = pd.read_excel(
-            path, 
-            sheet_name=None, 
-            header=None, 
-            engine=engine,
-            nrows=MAX_ROWS  # ← ADD THIS
-        )
-        print(f"  Sheets found: {list(raw_sheets.keys())}")
+            path, sheet_name=keep, header=None, engine=engine, nrows=MAX_ROWS)
+        if isinstance(raw_sheets, pd.DataFrame):   # single sheet -> wrap
+            raw_sheets = {keep[0]: raw_sheets}
+        print(f"  Sheets read: {list(raw_sheets.keys())}")
     except Exception as e:
         print(f"  ❌ Error reading file: {e}")
         return [], {}
@@ -432,7 +483,11 @@ def load_excel(path: str) -> Tuple[list[dict], dict]:
             if df.empty:
                 print(f"        ❌ DataFrame empty after cleaning")
                 continue
-            
+
+            if _is_degenerate_table(df):
+                print(f"        ⤳ skipped: no clear data columns (pivot/derived)")
+                continue
+
             key = f"{name}:{sheet}" if ri == 0 else f"{name}:{sheet}#{ri + 1}"
             dataframes[key] = df
             print(f"        ✓ Added: {key}")

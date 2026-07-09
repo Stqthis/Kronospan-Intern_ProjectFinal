@@ -18,6 +18,8 @@ better-informed than the old system, never worse.
 from __future__ import annotations
 
 import dataclasses
+import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -81,8 +83,8 @@ class TableReasoner:
         self.cards = cards or {}
         self.last_plan = None
         self.pending_clarify = None
-        self._plan_cache = {}
         self._index_version = index_version or str(len(self.dataframes))
+        self._plan_cache = self._load_plan_cache()
         from jarvisman.planning.query_plan import PlanValidator
         if model is not None and vindex is not None:
             self._validator = PlanValidator(self.dataframes, model, vindex) \
@@ -390,6 +392,7 @@ class TableReasoner:
                 and forced_bind is None and self.last_plan:
             self._plan_cache[(self._index_version, norm_text(question))] = \
                 dict(self.last_plan)
+            self._save_plan_cache()
         if out is not None:
             out.trace = trace + ["plan compiled and ran"]
             return out
@@ -585,6 +588,7 @@ class TableReasoner:
         if out is not None and out.kind == "ok" and cache_plan is not None \
                 and cfg.PLAN_CACHE:
             self._plan_cache[(self._index_version, norm_text(question))] = cache_plan
+            self._save_plan_cache()
         return out
 
     def _execute(self, bundle, plan, question: str, ev_block: str,
@@ -654,6 +658,52 @@ class TableReasoner:
                  for m in _PROV_RE.finditer(stdout)]
         return list(explain) + steps
 
+    def _load_plan_cache(self) -> dict:
+        """Read persisted plans for the current index version (0 model calls)."""
+        if not getattr(cfg, "PLAN_CACHE_PERSIST", True):
+            return {}
+        path = getattr(cfg, "PLAN_CACHE_PATH", "")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh) or {}
+        except Exception:
+            return {}
+        iv = self._index_version
+        out = {}
+        for q, plan in (data.get(iv, {}) or {}).items():
+            if isinstance(plan, dict):
+                out[(iv, q)] = plan
+        return out
+
+    def _save_plan_cache(self) -> None:
+        """Write the current index version's plans atomically; keep the file
+        small by retaining only the few most-recent index versions."""
+        if not getattr(cfg, "PLAN_CACHE_PERSIST", True):
+            return
+        path = getattr(cfg, "PLAN_CACHE_PATH", "")
+        if not path:
+            return
+        iv = self._index_version
+        bucket = {q: plan for (v, q), plan in self._plan_cache.items() if v == iv}
+        try:
+            existing = {}
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    existing = json.load(fh) or {}
+            except Exception:
+                existing = {}
+            existing[iv] = bucket
+            if len(existing) > 3:
+                for k in list(existing.keys())[:-3]:
+                    existing.pop(k, None)
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(existing, fh)
+            os.replace(tmp, path)
+        except Exception as exc:
+            cfg.dbg("reasoner._save_plan_cache", exc)
+
     def _synthesize(self, question: str, result_text: str,
                     provenance: list) -> Optional[str]:
         """One short call to phrase the computed result -- with an echo check:
@@ -675,7 +725,8 @@ class TableReasoner:
             out = self.ollama.chat(
                 cfg.model_for("synthesize", self.chat_model),
                 [{"role": "user", "content": prompt}],
-                options={"temperature": 0.1},
+                options={"temperature": 0.1,
+                         "num_predict": getattr(cfg, "SYNTH_NUM_PREDICT", 220)},
             ).strip()
         except Exception:
             return None

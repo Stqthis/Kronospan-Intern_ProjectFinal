@@ -9,6 +9,14 @@ import requests
 from jarvisman import config as cfg
 
 
+def _ka(value):
+    """Normalize keep_alive: the string "-1" -> int -1 so Ollama reads it as
+    'never unload' instead of failing to parse it as a duration."""
+    if str(value).strip() in ("-1", "-1s", "-1m", "-1h"):
+        return -1
+    return value
+
+
 class OllamaError(RuntimeError):
     """Raised for any problem talking to the local Ollama server."""
 
@@ -20,6 +28,16 @@ class OllamaClient:
     # ------------------------------------------------------------------ #
     # Health / discovery                                                 #
     # ------------------------------------------------------------------ #
+    def warmup(self, model: str, keep_alive: Optional[str] = None) -> bool:
+        """Best-effort: load and pin the model so the first real query is fast."""
+        try:
+            self.chat(model, [{"role": "user", "content": "ok"}],
+                      options={"num_predict": 1, "temperature": 0.0},
+                      keep_alive=keep_alive)
+            return True
+        except Exception:
+            return False
+
     def is_alive(self) -> bool:
         try:
             r = requests.get(f"{self.host}/api/version", timeout=cfg.LIST_TIMEOUT)
@@ -47,6 +65,7 @@ class OllamaClient:
         stream: bool = False,
         on_token: Optional[Callable[[str], None]] = None,
         keep_alive: Optional[str] = None,
+        format: Optional[str] = None,
     ) -> str:
         """Run a chat completion. Returns the full assistant text.
 
@@ -59,13 +78,37 @@ class OllamaClient:
         # destroys schema-heavy prompts. Callers can still override num_ctx.
         opts = {"num_ctx": cfg.NUM_CTX}
         opts.update(options or {})
+        # Right-size the KV context for length-capped calls. When the caller
+        # bounds generation with num_predict we can shrink num_ctx to fit the
+        # actual prompt plus that budget, which lowers prefill/allocation cost
+        # on large models. We estimate prompt length at an upper bound of one
+        # token per character (real ratio is >= 1 char/token for every script,
+        # including Greek), and never go above the caller's request nor below a
+        # safe floor -- so prompts are never truncated. Unbounded calls
+        # (num_predict unset) keep the full requested context untouched.
+        try:
+            requested_ctx = int(opts.get("num_ctx") or cfg.NUM_CTX)
+            npredict = int(opts.get("num_predict") or 0)
+            if npredict > 0:
+                chars = sum(len(str(m.get("content", ""))) for m in messages)
+                needed = chars + npredict + 256           # prompt + gen + slack
+                sized = ((needed + 511) // 512) * 512      # round up to 512
+                opts["num_ctx"] = max(2048, min(requested_ctx, sized))
+        except Exception:
+            pass
         payload = {
             "model": model,
             "messages": messages,
             "stream": bool(stream and on_token),
             "options": opts,
-            "keep_alive": keep_alive or cfg.KEEP_ALIVE,
+            "keep_alive": _ka(keep_alive or cfg.KEEP_ALIVE),
         }
+        # Constrain decoding to strict JSON when the caller asks for it. Ollama
+        # stops sampling at the end of the JSON value, so structured calls
+        # (planner, router, table profiling) don't waste tokens on trailing
+        # prose and parse on the first attempt.
+        if format:
+            payload["format"] = format
         url = f"{self.host}/api/chat"
 
         if not payload["stream"]:
@@ -104,7 +147,7 @@ class OllamaClient:
     # Embeddings                                                         #
     # ------------------------------------------------------------------ #
     def embed(self, text: str, model: str, keep_alive: Optional[str] = None) -> list[float]:
-        payload = {"model": model, "prompt": text, "keep_alive": keep_alive or cfg.KEEP_ALIVE}
+        payload = {"model": model, "prompt": text, "keep_alive": _ka(keep_alive or cfg.KEEP_ALIVE)}
         url = f"{self.host}/api/embeddings"
         try:
             r = requests.post(url, json=payload, timeout=cfg.EMBED_TIMEOUT)
@@ -132,7 +175,7 @@ class OllamaClient:
         if not texts:
             return []
         url = f"{self.host}/api/embed"
-        payload = {"model": model, "input": texts, "keep_alive": keep_alive or cfg.KEEP_ALIVE}
+        payload = {"model": model, "input": texts, "keep_alive": _ka(keep_alive or cfg.KEEP_ALIVE)}
         try:
             r = requests.post(url, json=payload, timeout=cfg.EMBED_TIMEOUT)
             r.raise_for_status()

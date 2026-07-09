@@ -546,7 +546,8 @@ class Agent:
              {"role": "user", "content": (
                  (("Recent conversation:\n" + self._history_block(4) + "\n\n")
                   if self.history else "") + "Current message: " + query)}],
-            options={"temperature": 0.0},
+            options={"temperature": 0.0, "num_predict": 200},
+            format="json",
         )
         parsed = _extract_json(raw)
         if parsed and parsed.get("tool") in _VALID_TOOLS:
