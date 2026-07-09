@@ -1,0 +1,105 @@
+[ 1] FAIL  (analyze)  expected 105,247,755.84, got [31.07, 2023.0, 1.0, -3.0, 1.0]
+       Q: What is the total of all type of funds of company Lignum Technologies 
+       trace: user chose an interpretation: 'eur' does NOT restrict rows: do NOT filter column 'CURRENCY'. Use the measure column 'AMOUNT EURO' of table 'CY01-DDR-3
+       trace: called the planner (1 LLM call)
+       trace: PLAN REJECTED -> falling through to codegen
+       trace:   planner proposed: ```json
+{
+  "steps": [
+    {
+      "table": "CY01-DDR-31-07-2023-DATA.xlsx:MATRIX",
+      "filter": {
+        "column": "COMPANY_NAME",
+        "value": "Lignum Technologies AG"
+      },
+      "sum_column": "AMOUNT EURO",
+      "description": "Filter rows where the company name is 'Lignum Technologi
+       got: [decision trace]
+  grounded values: 'CHN', 'EUR', 'Lignum', 'Lignum Technologies AG', as-at 31.07.2023
+  auto-interpreta
+[ 2] FAIL  (analyze)  expected 5,346,044.00, got [31.07, 2023.0, 1.0, -3.0, 1.0]
+       Q: What is the total of all type of funds in Euro (EUR) equivalent of all
+       trace: PLAN REJECTED -> falling through to codegen
+       trace:   reason: the question's condition 'Croatia' is missing from the plan's filters; every stated condition must apply
+       trace:   reason: the plan has no filters, aggregations or selected columns; it would just dump the table
+       trace:   planner proposed: To address the issues identified:
+
+1. Ensure that the filter for `COMPANY_COUNTRY_NAME` is included.
+2. Apply the validity interval filter correctly using `Start_date` and `End_date`.
+3. Sum the appropriate columns to get the total funds in EUR equivalent.
+
+Here is the corrected JSON plan:
+
+```json
+
+       got: [decision trace]
+  grounded values: 'Croatia', 'EUR', as-at 31.07.2023
+  auto-interpretation from question wording: 'eur
+[ 3] PASS  (analyze)  matched 27,010,703.00
+[ 4] FAIL  (analyze)  expected substring not present
+       Q: What is the total of all types of funds per Currency with the CaixaBan
+       got: Your question can be read in two different ways -- which one do you mean?
+[ 5] MANUAL(analyze)  Descending sort all interest rates for all Funds in Denmark 
+[ 6] FAIL  (analyze)  expected substring not present
+       Q: In which companies Koutouvas Athanasios was as director in the end of 
+       trace: called the planner (1 LLM call)
+       trace: PLAN REJECTED -> falling through to codegen
+       trace:   reason: the plan has no filters, aggregations or selected columns; it would just dump the table
+       trace:   planner proposed: Given that the data snapshot is from September 1, 2023, we cannot accurately determine Koutouvas Athanasios's directorships as of December 31, 2023, based on this dataset alone. However, we can still filter for his directorships as of September 1, 2023.
+
+Here is the corrected JSON plan:
+
+```json
+{
+ 
+       got: [decision trace]
+  grounded values: 'Director', as-at 31.12.2023
+  Tier 0.5 declined (not a simple single-anchor shape)
+
+[ 7] FAIL  (analyze)  expected substring not present
+       Q: Any changes for Koutouvas Athanasios directorships from December 2023 
+       trace: called the planner (1 LLM call)
+       trace: PLAN REJECTED -> falling through to codegen
+       trace:   reason: the plan has no filters, aggregations or selected columns; it would just dump the table
+       trace:   planner proposed: ```json
+{
+  "steps": [
+    {
+      "action": "filter",
+      "column": "DIRECTOR_NAME",
+      "value": "Koutouvas, Athanasios"
+    },
+    {
+      "action": "check_validity",
+      "start_date": "2023-12-01",
+      "end_date": "2024-12-31"
+    }
+  ],
+  "columns_to_return": [
+    "DIRECTOR_NAME",
+    
+       got: [decision trace]
+  grounded values: 'Director', as-at 31.12.2023
+  Tier 0.5 declined (not a simple single-anchor shape)
+
+[ 8] FAIL  (analyze)  expected substring not present
+       Q: CM21 Kronospan Mexico directors as at Dec. 2023 was Macicior Javier an
+       trace: called the planner (1 LLM call)
+       trace: PLAN REJECTED -> falling through to codegen
+       trace:   reason: table '' not found; available: ['CY01-DDR-31-07-2023-DATA.xlsx:MATRIX', 'CY05-Group_Company-09-2023-DATA.xlsx:CY05-Query']
+       trace:   planner proposed: ```json
+{
+  "steps": [
+    {
+      "step": "Filter by company name",
+      "table": "CY05-Group_Company-09-2023-DATA.xlsx:CY05-Query",
+      "condition": "COMPANY_NAME = 'CM21 Kronospan Mexico'",
+      "columns_to_select": ["DIRECTOR_NAME", "GRP_COMP_DIR_ID", "Start_date", "End_date"]
+    },
+    {
+ 
+       got: [decision trace]
+  grounded values: 'Director', 'MEX', 'Mexico', 'RON'
+  Tier 0.5 declined (not a simple single-anchor s
+
+SCORE: 1/7 auto-checked pass  (1 need manual review)

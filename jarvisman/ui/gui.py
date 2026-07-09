@@ -1702,6 +1702,15 @@ class MainWindow(QMainWindow):
         QLabel#heromark {{ color: {T['accent']}; font-size: 30px; }}
         QLabel#suggest {{ color: {T['muted']}; font-size: 12px; }}
         QLabel#typing {{ color: {T['accent']}; font-size: 12px; }}
+        QComboBox::drop-down {{
+        subcontrol-origin: padding;
+        subcontrol-position: center right;
+        width: 26px; border: none; background: transparent;
+        }}
+        QComboBox::down-arrow {{
+            image: url(jarvisman/ui/assets/chevron_down.svg);
+            width: 12px; height: 12px;
+        }}
         """
 
 

@@ -1188,6 +1188,20 @@ class Agent:
                     continue
                 break
             raw_err = result.get("error") or ""
+
+            # A GUARD rejection (merge / fabricated data) carries a precise,
+            # actionable instruction. Send it to the model verbatim and skip
+            # the rescue paths below -- those would re-run the rejected code
+            # (defeating the guard), and the generic column message further
+            # down would overwrite the real reason.
+            if raw_err.startswith("the code used pd.merge") or \
+                    raw_err.startswith("the code tried to CREATE or READ"):
+                if progress_callback:
+                    progress_callback("Rejected unsafe code; regenerating ...")
+                error = raw_err
+                prev_code = code or prev_code
+                continue
+
             # deterministic spelling rescue on the ERROR path too: a wrong
             # free-typed literal ('Koutouvas Athanasios') may sit alongside a
             # fixable error; rewriting it to the stored value and re-running

@@ -1,0 +1,72 @@
+# One block per question. Format:
+# Q: <the question exactly as a user would type it>
+# A: <the known-correct answer>
+# TYPE: exact_number | contains | shape   (how to check it)
+# ---
+Q: What is the total of all type of funds of company Lignum Technologies AG in Euro equivalent as at 31.07.2023?
+A: 105,247,755.84
+TYPE: exact_number
+---
+Q: What is the total of all type of funds in Euro (EUR) equivalent of all Croatian companies as at 31.07.2023?
+A: 5,346,044
+TYPE: exact_number
+---
+Q: What is the total of all type of funds with the RBI bank in Euro (EUR) equivalent as at 31.07.2023?
+A: 27,010,703
+TYPE: exact_number
+---
+Q: What is the total of all types of funds per Currency with the CaixaBank, S.A. bank as at 31.07.2023?
+A:  Euro (EUR): 19,455,244
+    Moroccan Dirham (MAD):2,158,101
+    Mexican Peso (MXN):1,833,546
+TYPE: shape
+---
+Q: Descending sort all interest rates for all Funds in Denmark and indicate their currency, company and bank held with as at 31.07.2023
+A: COMPANY
+Nordalim A/S
+Kronospan
+ApS
+Kronospan
+ApS
+Kronospan
+ApS
+Nordalim A/S
+Kronospan
+ApS
+BANK
+Danske Bank A/S
+RATE % CURRENCY
+4.236 DKK
+Danske Bank A/S2.920 EUR
+Danske Bank A/S2.750 SEK
+Danske Bank A/S
+Danske Bank A/S
+Djurslands Bank
+A/S2.736 DKK
+2.670 EUR
+0.000 DKK
+TYPE: shape
+---
+Q: In which companies Koutouvas Athanasios was as director in the end of December 2023:
+A:  CY09 Konikato Holdings Limited
+    CY10 KR Falco Holdings Ltd
+    CY14 Kronospan Holdings South Limited,
+    CY25 Shrugeza Holdings Co. Ltd
+    CY44 New Kronospan Holdings South Ltd
+    AT01 Kronospan S.A.
+TYPE: shape
+---
+Q: Any changes for Koutouvas Athanasios directorships from December 2023 until the end of December 2024?
+A: No Koutouvas Athanasios is as director in the same companies from Dec.2023 to Dec.2024 and he is not director in any new company for that period.
+TYPE: contains
+---
+Q: Which companies share the same address in Italy and which are not?
+A: PO01 Kronospan Italia s.r.l ,PO35 Silva S.r.l have the same address and GN01 Instalmec s.r.l has different address.
+TYPE: contains
+---
+Q: Which South group companies changed their name during the period June 2024 to June 2025?
+A:  CY09 – Konikato Holdings Limited (Old name: CY09 – Konikato Holdings Ltd)
+    CY14 – Kronospan Holdings South Limited (Old name : CY14 - Kronospan Holdings South Ltd)
+    KS01 – KronoSHOP EOOD (Old name - KS01 – KronoSHOP Ltd)
+TYPE: shape
+
