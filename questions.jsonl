@@ -1,0 +1,10 @@
+{"q": "What is the total of all funds for Lignum Technologies AG in euro?", "expect": []}
+{"q": "How much money in EUR do Croatian companies hold in total?", "expect": []}
+{"q": "Total funds with Raiffeisen bank in euros", "expect": []}
+{"q": "Show the funds per currency held with CaixaBank", "expect": ["EUR"]}
+{"q": "Which companies was Koutouvas Athanasios a director of at the end of 2023?", "expect": []}
+{"q": "Sort the interest rates in Denmark from highest to lowest with the company and bank", "expect": []}
+{"q": "Which companies share the same address in Italy?", "expect": []}
+{"q": "companies where Spiros Spyrou is a director", "expect": []}
+{"q": "companies where Spuros spirou is director", "expect": []}
+{"q": "how many directors does each company have", "expect": []}
