@@ -39,7 +39,6 @@ from jarvisman.llm.ollama_client import OllamaClient
 from jarvisman.retrieval.rag import RAGPipeline
 from jarvisman.retrieval.vector_store import VectorStore
 from jarvisman.ui.workers import Worker
-from jarvisman.ui.response_handler import ResponseDataExtractor
 
 # --------------------------------------------------------------------------- #
 # Theme: one palette drives the whole window via a Qt style sheet.            #
@@ -1346,23 +1345,6 @@ class MainWindow(QMainWindow):
         self.chat.setTextCursor(cur)
         self.chat.ensureCursorVisible()
         self._flush_pending_table()
-
-        # Detect and show chart selector
-        if result:
-            try:
-                response_text = str(result.get("answer", "") or result.get("text", "") or result)
-                extraction = ResponseDataExtractor.detect_numerical_data(response_text)
-                
-                if extraction.has_data and extraction.df is not None:
-                    self.data_summary.update_summary(extraction.df)
-                    self.chart_selector.set_dataframe(extraction.df)
-                    self.chart_selector.set_available_charts(extraction.suggested_charts)
-                    self.chart_selector.setVisible(True)
-                else:
-                    self.chart_selector.setVisible(False)
-            except Exception:
-                self.chart_selector.setVisible(False)
-
 
     def _render_answer(self, result: dict) -> None:
         text = result.get("text", "") or ""
