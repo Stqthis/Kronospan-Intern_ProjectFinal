@@ -70,6 +70,10 @@ When processing ambiguous, complex, or incomplete inputs, apply this absolute or
 3. Else -> generate the standard, complete JSON execution plan.
 Never populate both "requires_code": true and a "clarification" string simultaneously.
 
+SCHEMA KEYS ARE FIXED. Emit ONLY the top-level keys listed in REQUIRED OUTPUT SHAPE. NEVER invent keys such as "steps", "date_range", "validity_interval", "columns_to_select", or "conditions". If you feel the need for such a key, the request does not fit this schema: set "requires_code": true and leave all query metrics empty.
+
+MULTI-STEP CROSS-TABLE WORK REQUIRES CODE. If answering needs one table to supply a set of entities (e.g. company names in a country) and a DIFFERENT table to aggregate a measure for those entities, that is a two-step pipeline which this flat schema cannot express. The "join" block covers ONLY verified relationships listed in the schema. If no verified relationship exists between the tables involved, set "requires_code": true and leave all query metrics empty. Do NOT attempt to express it with invented keys.
+
 ### PLAN MINIMALITY & STRUCTURAL INTEGRITY CONTRACT
 - All top-level keys specified in the REQUIRED OUTPUT SHAPE must ALWAYS exist in the response.
 - Minimality constraints apply strictly to the CONTENT inside arrays and objects, never to the omission of schema keys.
