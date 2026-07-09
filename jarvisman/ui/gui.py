@@ -663,37 +663,33 @@ class MainWindow(QMainWindow):
 
     def _apply_theme_swap(self) -> None:
         """Toggle between dark and light theme."""
+        # setHtml() rebuilds the document and resets scroll; the stylesheet
+        # re-applications below trigger further re-layouts. Capture the
+        # position now and restore it LAST, deferred, once Qt has settled.
+        bar = self.chat.verticalScrollBar()
+        was_at_bottom = bar.value() >= bar.maximum() - 4
+        saved_scroll = bar.value()
+
         self.is_dark_theme = not self.is_dark_theme
         self.current_theme = self.theme_manager.get_theme(self.is_dark_theme)
-        
+
         T = self.current_theme
-        
+
         # Update button
         self.theme_btn.setText("☀️" if self.is_dark_theme else "🌙")
-        
+
         # Update main stylesheet
         self.setStyleSheet(self._get_stylesheet())
-        
-        # Get current HTML
+
+        # Recolour the existing transcript in place
         html_content = self.chat.toHtml()
-        
         if html_content:
-            # Replace theme colors in the HTML
             old_theme = self.theme_manager.get_theme(not self.is_dark_theme)
-            
-            # Replace old colors with new colors
-            html_content = html_content.replace(old_theme['bg'], T['bg'])
-            html_content = html_content.replace(old_theme['text'], T['text'])
-            html_content = html_content.replace(old_theme['panel'], T['panel'])
-            html_content = html_content.replace(old_theme['accent'], T['accent'])
-            html_content = html_content.replace(old_theme['accent_dim'], T['accent_dim'])
-            html_content = html_content.replace(old_theme['panel2'], T['panel2'])
-            html_content = html_content.replace(old_theme['border'], T['border'])
-            html_content = html_content.replace(old_theme['code_bg'], T['code_bg'])
-            
-            # Re-apply the updated HTML
+            for key in ('bg', 'text', 'panel', 'accent', 'accent_dim',
+                        'panel2', 'border', 'code_bg'):
+                html_content = html_content.replace(old_theme[key], T[key])
             self.chat.setHtml(html_content)
-        
+
         # Update chat widget COLORS WITHOUT clearing text
         self.chat.setStyleSheet(
             f"""
@@ -705,7 +701,7 @@ class MainWindow(QMainWindow):
             }}
             """
         )
-        
+
         # Update input box
         self.input.setStyleSheet(
             f"""
@@ -718,18 +714,25 @@ class MainWindow(QMainWindow):
             }}
             """
         )
-        
+
         # Update sidebar
         self.sidebar.setStyleSheet(f"QWidget {{ background: {T['bg']}; }}")
-    
+
         # Force button to keep primary styling
         if hasattr(self, 'build_btn'):
-            self.build_btn.setStyleSheet("")  # Clear
-            self.build_btn.setStyleSheet(self._get_stylesheet())  # Reapply
-        
+            self.build_btn.setStyleSheet("")
+            self.build_btn.setStyleSheet(self._get_stylesheet())
+
         # Force repaint
         self.repaint()
         self.update()
+
+        # LAST: restore the reading position, after every re-layout above.
+        def _restore():
+            b = self.chat.verticalScrollBar()
+            b.setValue(b.maximum() if was_at_bottom
+                       else min(saved_scroll, b.maximum()))
+        QTimer.singleShot(0, _restore)
 
 
     @staticmethod
