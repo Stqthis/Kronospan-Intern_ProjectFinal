@@ -149,7 +149,10 @@ def _extract_code(raw: str) -> str:
     m = _CODE_BLOCK_RE.search(raw)
     if m:
         return m.group(1).strip()
-    return raw.strip() if "plt" in raw else ""
+    stripped = raw.strip()
+    stripped = re.sub(r"^```[a-zA-Z]*\s*", "", stripped)
+    stripped = re.sub(r"\s*```\s*$", "", stripped)
+    return stripped.strip() if "plt" in stripped else ""
 
 
 def _extract_code_any(raw: str) -> str:
@@ -158,6 +161,12 @@ def _extract_code_any(raw: str) -> str:
     if m:
         return m.group(1).strip()
     stripped = raw.strip()
+    # The model sometimes emits an UNCLOSED fence (or the closing one is cut off
+    # by num_predict). The full-block regex then misses and the raw text -- fence
+    # and all -- would reach the sandbox as invalid syntax. Strip stray fences.
+    stripped = re.sub(r"^```[a-zA-Z]*\s*", "", stripped)
+    stripped = re.sub(r"\s*```\s*$", "", stripped)
+    stripped = stripped.strip()
     if "result" in stripped or "df" in stripped or "dfs" in stripped:
         return stripped
     return ""
@@ -896,12 +905,22 @@ class Agent:
         if rewrite_hits:
             code, _rw = self._rewrite_literals_to_verified(code, rewrite_hits)
         # reject fabricated data: model building its OWN df/dfs instead of using ours
-        if re.search(r"(?m)^\s*(?:df|dfs)\s*=\s*pd\.(?:DataFrame|Series|read_)", code):
+        
+        # reject fabricated data: model building its OWN df/dfs instead of using ours
+        # reject cross-table pd.merge: the two tables have no verified
+        # relationship and the "many rows per entity" side fans out every row,
+        # inflating sums. Force the correct .isin() shape instead.
+        if re.search(r"\bpd\.merge\s*\(|\.\s*merge\s*\(", code):
             return (
                 {"ok": False, "text": None, "table_html": None, "stdout": "",
-                 "error": ("the code tried to CREATE or READ its own data instead of using "
-                           "the provided `df`/`dfs`. Use ONLY the provided variables; do not "
-                           "write pd.DataFrame(...), pd.Series(...) or pd.read_*().")},
+                 "error": (
+                     "the code used pd.merge / .merge to combine tables. That is "
+                     "NOT allowed here: the lookup table has MANY rows per entity "
+                     "(directors, shareholders), so merging duplicates every row "
+                     "of the measure table and inflates any sum. Instead: take the "
+                     "DISTINCT key values from the lookup table (e.g. "
+                     "names = lookup.loc[mask, 'COMPANY_NAME'].dropna().unique()) "
+                     "and filter the measure table with .isin(names). Do not merge.")},
                 code, [],
             )
         # remap any non-existent column references BEFORE running (general, data-agnostic)
