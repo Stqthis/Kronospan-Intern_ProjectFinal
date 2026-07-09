@@ -1466,6 +1466,16 @@ class MainWindow(QMainWindow):
                 return
             self.input.setText(unquote(link[4:]))
             self._send()
+        if link.startswith("code:"):
+            code = self._prov_store.pop(link, None)
+            if code:
+                T = self.current_theme
+                self._append_html(
+                    f'<pre style="background:{T["code_bg"]}; color:{T["text"]}; '
+                    f'padding:10px 12px; border-radius:8px; font-size:12px; '
+                    f'white-space:pre-wrap; border:1px solid {T["border"]}; '
+                    f'margin:4px 0 8px 0;">{html.escape(code)}</pre>')
+            return
 
     def _on_answer_error(self, message: str) -> None:
         first = message.splitlines()[0] if message else "Unknown error"
@@ -1564,15 +1574,18 @@ class MainWindow(QMainWindow):
             f'<br><img src="{url.toString()}" width="{width}"><br>')
 
     def _append_code(self, code: str) -> None:
-        escaped = html.escape(code, quote=False)
+        """Render generated code behind a disclosure link instead of dumping
+        it into the transcript -- most users never want to see it."""
         T = self.current_theme
+        MainWindow._prov_seq += 1
+        key = f"code:{MainWindow._prov_seq}"
+        self._prov_store[key] = code
         self._append_html(
-            f'<div style="color:{T["muted"]}; font-size:11px; '
-            f'margin-top:8px;">Generated code</div>'
-            f'<pre style="background:{T["code_bg"]}; color:{T["text"]}; '
-            f'padding:10px 12px; border-radius:8px; font-size:12px; '
-            f'white-space:pre-wrap; border:1px solid {T["border"]};">'
-            f'{escaped}</pre>')
+            f'<div style="margin-top:6px;">'
+            f'<a href="{key}" style="text-decoration:none;">'
+            f'<span style="color:{T["muted"]}; font-size:11px;">'
+            f'&#9656; Generated code</span></a>'
+            f'</div>')
 
     # ------------------------------------------------------------------ #
     def _set_busy(self, busy: bool, message: Optional[str] = None) -> None:
