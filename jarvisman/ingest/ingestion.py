@@ -15,22 +15,180 @@ from jarvisman import config as cfg
 # Loaders                                                                     #
 # --------------------------------------------------------------------------- #
 def load_pdf(path: str) -> Tuple[list[dict], dict]:
+    """PDF -> prose records for retrieval AND ruled tables as DataFrames.
+
+    Tables inside PDFs (e.g. the DDR 'pdf version' reports) are extracted with
+    PyMuPDF's table finder and routed through the SAME cleaning pipeline as
+    Excel sheets, so numeric questions against a PDF are answered by the table
+    reasoner (exact arithmetic over a DataFrame) instead of text retrieval,
+    which cannot sum figures scattered across chunks. Continuation pages are
+    stitched two ways: a same-width page table whose first row is data (no
+    repeated header) extends the previous table; tables whose recovered
+    headers are identical are merged across pages. Everything is best-effort:
+    a PDF with no detectable tables behaves exactly as before (prose only).
+    """
     import fitz  # PyMuPDF; imported lazily to keep import time low
 
     name = os.path.basename(path)
     records: list[dict] = []
+    page_grids: list = []          # [(page_no, raw grid DataFrame), ...]
     doc = fitz.open(path)
     try:
         for i, page in enumerate(doc):
             text = page.get_text().strip()
             if text:
                 records.append({"text": text, "source": name, "location": f"p.{i + 1}"})
+            try:
+                found = page.find_tables()
+                tabs = list(getattr(found, "tables", None) or [])
+            except Exception as exc:
+                cfg.dbg(f"ingestion.load_pdf find_tables p{i + 1}", exc)
+                tabs = []
+            for t in tabs:
+                try:
+                    rows = t.extract()
+                except Exception as exc:
+                    cfg.dbg(f"ingestion.load_pdf extract p{i + 1}", exc)
+                    continue
+                rows = [r for r in (rows or []) if any(_cell_filled(v) for v in r)]
+                if len(rows) < 2 or max(len(r) for r in rows) < 2:
+                    continue  # a 1-row/1-col "table" is layout noise, not data
+                page_grids.append((i + 1, pd.DataFrame(rows)))
     finally:
         doc.close()
-    return records, {}
+
+    if not page_grids:
+        return records, {}
+
+    # Pass 1 -- stitch continuation pages. A page grid continues the previous
+    # table when it has the same width, does NOT open by repeating the
+    # previous header row, and its column TYPE pattern (which columns hold
+    # numbers) matches the previous table's data rows. The type signature --
+    # not "does the first row look like a header" -- is what correctly keeps a
+    # text-heavy data row (Company | Bank | Country | ...) as data.
+    def _row_key(row) -> tuple:
+        return tuple(str(v).strip().lower() if _cell_filled(v) else ""
+                     for v in row)
+
+    def _col_pattern(frame: "pd.DataFrame", skip_first: bool) -> list:
+        body = frame.iloc[1:] if skip_first and len(frame) > 1 else frame
+        pat = []
+        for j in range(frame.shape[1]):
+            vals = [v for v in body.iloc[:, j] if _cell_filled(v)]
+            pat.append(bool(vals) and
+                       sum(1 for v in vals if _numberish(v)) / len(vals) >= 0.5)
+        return pat
+
+    logical: list = []             # [width, first_page, last_page, [grids]]
+    for pageno, grid in page_grids:
+        w = grid.shape[1]
+        cont = False
+        if logical and logical[-1][0] == w:
+            prev0 = logical[-1][3][0]
+            header_repeat = _row_key(grid.iloc[0]) == _row_key(prev0.iloc[0])
+            if not header_repeat:
+                a = _col_pattern(prev0, skip_first=True)
+                b = _col_pattern(grid, skip_first=False)
+                agree = sum(1 for x, y in zip(a, b) if x == y)
+                cont = agree >= 0.8 * w
+        if cont:
+            logical[-1][3].append(grid)
+            logical[-1][2] = pageno
+        else:
+            logical.append([w, pageno, pageno, [grid]])
+
+    # Pass 2 -- recover headers, clean like Excel, and merge tables whose
+    # recovered headers are identical (header repeated on every page).
+    dataframes: dict = {}
+    by_header: dict = {}           # recovered column tuple -> table key
+    for w, p0, p1, grids in logical:
+        raw = pd.concat(grids, ignore_index=True) if len(grids) > 1 else grids[0]
+        df = _recover_header(raw)
+        if df is None or df.empty:
+            continue
+        df = _strip_text_cells(_clean_columns(df))
+        if df.empty or _is_degenerate_table(df):
+            continue
+        sig = tuple(str(c) for c in df.columns)
+        prev = by_header.get(sig)
+        if prev is not None:
+            dataframes[prev] = pd.concat([dataframes[prev], df],
+                                         ignore_index=True)
+            continue
+        loc = f"p{p0}" if p0 == p1 else f"p{p0}-{p1}"
+        key, n = f"{name}:{loc}", 2
+        while key in dataframes:
+            key = f"{name}:{loc}#{n}"
+            n += 1
+        by_header[sig] = key
+        dataframes[key] = df
+    # Coerce numbers AFTER all merging, so a short continuation page (too few
+    # values to satisfy the coercion guards on its own) is typed together with
+    # the rest of its table instead of leaving a mixed str/float column.
+    for key in list(dataframes):
+        dataframes[key] = _coerce_us_numbers(_apply_eu_numbers(dataframes[key]))
+    # Quality gate: complex report layouts (multi-line headers, column spans)
+    # can defeat the geometric table finder and come out under-segmented --
+    # several figures glued into one cell. Feeding that to the reasoner would
+    # produce WRONG answers, which is worse than none: reject it and keep the
+    # page text searchable instead. The clean DATA workbooks remain the
+    # authoritative source for those reports.
+    rejected = 0
+    for key in list(dataframes):
+        if not _pdf_table_quality_ok(dataframes[key]):
+            del dataframes[key]
+            rejected += 1
+    if dataframes:
+        print(f"\n\U0001F4C4 {name}: extracted {len(dataframes)} "
+              f"table(s) from the PDF")
+    if rejected:
+        print(f"\U0001F4C4 {name}: skipped {rejected} malformed table "
+              f"extraction(s); those pages stay text-searchable")
+    return records, dataframes
 
 
 _MAX_HEADER_SCAN = 15  # how many top rows to consider when locating the header
+
+# two or more separate number groups inside ONE cell = column under-segmentation
+_MULTINUM_RE = None  # compiled below, after `re` usage is established
+
+
+def _pdf_table_quality_ok(df) -> bool:
+    """True only for a well-formed PDF table extraction.
+
+    Rejects (a) headers that are mostly numbers (data mistaken for a header),
+    and (b) tables where a meaningful share of body cells contain SEVERAL
+    number groups glued together -- the signature of a geometric extraction
+    that merged visual columns. Conservative: anything passing still goes
+    through the normal degeneracy checks."""
+    global _MULTINUM_RE
+    import re as _re
+    if _MULTINUM_RE is None:
+        _MULTINUM_RE = _re.compile(r"\d[\d,.]*\s+[\d(]")
+    try:
+        cols = [str(c) for c in df.columns]
+        if not cols:
+            return False
+        if sum(1 for c in cols if _numberish(c)) / len(cols) > 0.3:
+            return False
+        total = multi = 0
+        sample = df.head(200)
+        for col in sample.columns:
+            for v in sample[col]:
+                if not isinstance(v, str):
+                    continue
+                s = v.strip()
+                if not s:
+                    continue
+                total += 1
+                if _MULTINUM_RE.search(s) and \
+                        sum(ch.isdigit() for ch in s) >= 6:
+                    multi += 1
+        if total and multi / total > 0.15:
+            return False
+        return True
+    except Exception:
+        return True
 
 
 _YEAR_CELL_RE = None  # set below (re already imported at module top)
@@ -269,49 +427,107 @@ def _split_regions(raw: "pd.DataFrame") -> list:
     return [raw.iloc[a:b].reset_index(drop=True) for a, b in regions]
 
 
+def _merged_ranges_from_zip(path: str) -> dict:
+    """Read merged-cell ranges straight from the .xlsx XML: {sheet_title:
+    [(r0, c0, r1, c1), ...]} with 0-based inclusive coordinates. Milliseconds
+    even on very large workbooks -- this replaced a full openpyxl re-load that
+    cost ~30s on the 77k-row loan schedule while only the merge RANGES were
+    needed (the top-left VALUES are already in the pandas grid)."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    def _ref_to_rc(ref: str):
+        m = re.fullmatch(r"([A-Z]+)(\d+)", ref)
+        if not m:
+            return None
+        col = 0
+        for ch in m.group(1):
+            col = col * 26 + (ord(ch) - 64)
+        return int(m.group(2)) - 1, col - 1
+
+    out: dict = {}
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+          "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
+    with zipfile.ZipFile(path) as z:
+        wb = ET.fromstring(z.read("xl/workbook.xml"))
+        rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+        rid_to_target = {
+            rel.get("Id"): rel.get("Target")
+            for rel in rels
+            if (rel.get("Type") or "").endswith("/worksheet")
+        }
+        for sh in wb.find("m:sheets", ns) or []:
+            title = sh.get("name")
+            rid = sh.get("{http://schemas.openxmlformats.org/officeDocument"
+                         "/2006/relationships}id")
+            target = rid_to_target.get(rid)
+            if not target:
+                continue
+            target = target.lstrip("/")
+            if not target.startswith("xl/"):
+                target = "xl/" + target
+            try:
+                data = z.read(target)
+            except KeyError:
+                continue
+            # Do NOT parse the whole worksheet XML (sheetData for a 109k-row
+            # sheet costs ~9s in ElementTree); scan the bytes for the small
+            # <mergeCells> section directly. Sheets without merges cost one
+            # substring check.
+            a = data.find(b"<mergeCells")
+            if a == -1:
+                continue
+            b = data.find(b"</mergeCells>", a)
+            seg = data[a:(b + 13) if b != -1 else min(len(data), a + 65536)]
+            ranges = []
+            for m in re.finditer(rb'ref="([A-Z]+\d+):([A-Z]+\d+)"', seg):
+                p0 = _ref_to_rc(m.group(1).decode())
+                p1 = _ref_to_rc(m.group(2).decode())
+                if p0 and p1:
+                    ranges.append((p0[0], p0[1], p1[0], p1[1]))
+            if ranges:
+                out[title] = ranges
+    return out
+
+
 def _fill_merged_headers(path: str, raw_sheets: dict) -> None:
-    """openpyxl metadata pass: forward-fill the top-left value of every merged
-    cell across its span (header zone only) so multi-row merged headers
-    flatten exactly instead of by inference. Best-effort: any failure leaves
-    the pandas-only behaviour untouched."""
+    """Forward-fill the top-left value of every merged cell across its span
+    (header zone only) so multi-row merged headers flatten exactly instead of
+    by inference. The ranges come from the workbook XML (fast); the values
+    come from the already-loaded pandas grid, so the workbook is never opened
+    a second time. Best-effort: any failure leaves the pandas-only behaviour
+    untouched."""
     try:
-        import openpyxl
-        wb = openpyxl.load_workbook(path, data_only=True, read_only=False)
+        merged = _merged_ranges_from_zip(path)
     except Exception as exc:
-        # feature-isolation: the whole merged-header pass is optional; any
-        # failure (missing dep, bad/locked file) leaves the pandas-only
-        # behaviour untouched. Surface it rather than hide it.
-        cfg.dbg(f"ingestion._fill_merged_headers load [{path}]", exc)
+        cfg.dbg(f"ingestion._fill_merged_headers ranges [{path}]", exc)
         return
     try:
-        for ws in wb.worksheets:
-            raw = raw_sheets.get(ws.title)
+        for title, ranges in merged.items():
+            raw = raw_sheets.get(title)
             if raw is None or raw.empty:
                 continue
-            for rng in list(getattr(ws, "merged_cells", []).ranges or []):
-                r0, c0 = rng.min_row - 1, rng.min_col - 1
+            for r0, c0, r1, c1 in ranges:
                 if r0 >= min(len(raw), _MAX_HEADER_SCAN):
                     continue  # merges deep in the data zone are not headers
-                try:
-                    val = ws.cell(rng.min_row, rng.min_col).value
-                except (IndexError, ValueError, AttributeError) as exc:
-                    cfg.dbg("ingestion merged-cell read", exc)
+                if r0 >= len(raw) or c0 >= raw.shape[1]:
                     continue
-                if val is None:
+                val = raw.iat[r0, c0]
+                if not _cell_filled(val):
                     continue
-                for r in range(r0, min(rng.max_row, len(raw))):
-                    for c in range(c0, min(rng.max_col, raw.shape[1])):
+                for r in range(r0, min(r1 + 1, len(raw))):
+                    for c in range(c0, min(c1 + 1, raw.shape[1])):
                         if not _cell_filled(raw.iat[r, c]):
-                            raw.iat[r, c] = val
+                            try:
+                                raw.iat[r, c] = val
+                            except (TypeError, ValueError):
+                                # pandas-3 typed column (e.g. str) rejecting a
+                                # cross-dtype fill: relax to object and retry
+                                col = raw.columns[c]
+                                raw[col] = raw[col].astype(object)
+                                raw.iat[r, c] = val
     except Exception as exc:
-        # isolation around the fill loop: a malformed merge map must not abort
-        # ingestion; the sheet still loads via the pandas path.
         cfg.dbg("ingestion._fill_merged_headers fill", exc)
-    finally:
-        try:
-            wb.close()
-        except Exception:
-            pass  # cleanup: a close() failure is never actionable
 
 
 _EU_NUM_RE = re.compile(r"^-?\d{1,3}(\.\d{3})+(,\d+)?$|^-?\d+,\d+$")
@@ -351,6 +567,58 @@ def _apply_eu_numbers(df: "pd.DataFrame") -> "pd.DataFrame":
             errors="coerce",
         )
         df[col] = out
+    return df
+
+
+_US_NUM_RE = re.compile(r"^-?\(?\$?\s?\d{1,3}(,\d{3})*(\.\d+)?\)?$"
+                        r"|^-?\d+(\.\d+)?$")
+
+
+def _coerce_us_numbers(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Convert string columns that are consistently US/accounting-formatted
+    numbers ('105,247,755.84', '(1,234.50)') to real numbers.
+
+    Needed for PDF-extracted tables, where EVERY cell arrives as a string;
+    Excel numeric columns are already numeric dtype and pass through
+    untouched. Conservative, mirroring _apply_eu_numbers: >= 80% of non-null
+    values must fully match, conversion must keep >= 95% of them, and any
+    column with EU-style values is left for the EU pass."""
+    if df is None or df.empty:
+        return df
+    for col in df.columns:
+        s = df[col]
+        if getattr(s.dtype, "kind", "O") in "iufcMmb" or hasattr(s, "columns"):
+            continue
+        vals = s.dropna().astype(str).str.strip()
+        vals = vals[vals != ""]
+        if len(vals) < 2:
+            continue
+        if vals.map(lambda v: bool(_EU_NUM_RE.fullmatch(v))).any():
+            continue  # EU-formatted column: _apply_eu_numbers owns it
+        rate = float(vals.map(lambda v: bool(_US_NUM_RE.fullmatch(v))).mean())
+        if rate < 0.8:
+            continue
+        # comma or decimal evidence required: a column of bare integer CODES
+        # ('1024', '2048') stays text -- exact-match filters must keep working
+        if not (vals.str.contains(",", regex=False).any()
+                or vals.str.contains(".", regex=False).any()):
+            continue
+
+        def _conv(v):
+            t = str(v).strip().replace("$", "").replace(" ", "")
+            neg = t.startswith("(") and t.endswith(")")
+            t = t.strip("()").replace(",", "")
+            try:
+                x = float(t)
+            except ValueError:
+                return None
+            return -x if neg else x
+
+        conv = vals.map(_conv)
+        if conv.notna().sum() < len(vals) * 0.95:
+            continue
+        df[col] = s.map(lambda v: _conv(v)
+                        if isinstance(v, str) and v.strip() else v)
     return df
 
 
@@ -422,13 +690,18 @@ def load_excel(path: str) -> Tuple[list[dict], dict]:
     # up front so this stays fast despite the larger cap.
     MAX_ROWS = getattr(cfg, "EXCEL_MAX_ROWS", 250000)
 
-    # Determine engine based on file extension
-    if path.lower().endswith('.xlsx') or path.lower().endswith('.xlsm'):
-        engine = 'openpyxl'
-    elif path.lower().endswith('.xls'):
-        engine = 'xlrd'
-    else:
-        engine = None  # Let pandas figure it out
+    # Engine: prefer 'calamine' (Rust reader; ~4x faster on large sheets and
+    # cell-identical to openpyxl on the real Kronospan files). Fall back to
+    # openpyxl/xlrd when python-calamine is not installed.
+    engine = None
+    try:
+        import python_calamine  # noqa: F401
+        engine = 'calamine'
+    except ImportError:
+        if path.lower().endswith(('.xlsx', '.xlsm')):
+            engine = 'openpyxl'
+        elif path.lower().endswith('.xls'):
+            engine = 'xlrd'
 
     # Only read the sheets that hold primary data.
     try:

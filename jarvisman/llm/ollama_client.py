@@ -78,6 +78,13 @@ class OllamaClient:
         # destroys schema-heavy prompts. Callers can still override num_ctx.
         opts = {"num_ctx": cfg.NUM_CTX}
         opts.update(options or {})
+        # Reproducibility: a fixed seed makes sampling deterministic, so the
+        # same prompt returns the same completion on every run -- the core of
+        # answer consistency. Applied centrally so every stage (plan, codegen,
+        # synthesis, cards) is covered; a caller may still override by passing
+        # its own "seed" in options.
+        if getattr(cfg, "DETERMINISTIC", True) and "seed" not in opts:
+            opts["seed"] = getattr(cfg, "LLM_SEED", 42)
         # Right-size the KV context for length-capped calls. When the caller
         # bounds generation with num_predict we can shrink num_ctx to fit the
         # actual prompt plus that budget, which lowers prefill/allocation cost

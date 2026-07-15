@@ -405,6 +405,17 @@ class Agent:
         if len(self.dataframes) <= 1:
             return self.dataframes
 
+        # Content routing first: a snapshot date, period, or entity value in
+        # the question settles same-schema files that _score_tables ranks as a
+        # dead tie (and it stops the model reaching into the wrong sheet).
+        if self.semantic_model is not None:
+            from jarvisman.semantics.semantic_model import content_route
+            routed = content_route(query, self.semantic_model,
+                                   max_n=self.MAX_ANALYSIS_TABLES)
+            if routed:
+                return {n: self.dataframes[n] for n in routed
+                        if n in self.dataframes}
+
         scored = self._score_tables(query)
         best_score, best_name = scored[0]
         second = scored[1][0] if len(scored) > 1 else 0.0
@@ -746,7 +757,7 @@ class Agent:
     def _generate_and_run(self, prompt: str) -> tuple[dict, str]:
         raw = self.ollama.chat(
             cfg.model_for("codegen", self.chat_model),
-            [{"role": "user", "content": prompt}], options={"temperature": 0.2}
+            [{"role": "user", "content": prompt}], options={"temperature": 0.0}
         )
         code = _extract_code(raw)
         if not code:
@@ -880,7 +891,7 @@ class Agent:
                             rewrite_hits=None) -> tuple[dict, str, list]:
         raw = self.ollama.chat(
             cfg.model_for("codegen", self.chat_model),
-            [{"role": "user", "content": prompt}], options={"temperature": 0.1}
+            [{"role": "user", "content": prompt}], options={"temperature": 0.0}
         )
         code = _extract_code_any(raw)
         if not code:

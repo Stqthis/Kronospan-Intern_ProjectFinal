@@ -20,8 +20,8 @@ class ChartTypeSelector(QWidget):
     def __init__(self, parent=None, theme: dict = None):
         super().__init__(parent)
         self.theme = theme or {
-            "bg": "#faf9f5", "panel": "#ffffff", "border": "#e3e0d6",
-            "text": "#2b2a27", "accent": "#c65d3b", "muted": "#6f6b60"
+            "bg": "#f5f8fc", "panel": "#ffffff", "border": "#d5e0ee",
+            "text": "#16273c", "accent": "#0f5aa8", "muted": "#5b6b81"
         }
         self.current_df = None
         self.available_charts = []
@@ -167,8 +167,8 @@ class DataSummaryPanel(QFrame):
     def __init__(self, parent=None, theme: dict = None):
         super().__init__(parent)
         self.theme = theme or {
-            "bg": "#faf9f5", "panel": "#ffffff", "border": "#e3e0d6",
-            "text": "#2b2a27", "accent": "#c65d3b", "muted": "#6f6b60"
+            "bg": "#f5f8fc", "panel": "#ffffff", "border": "#d5e0ee",
+            "text": "#16273c", "accent": "#0f5aa8", "muted": "#5b6b81"
         }
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setLineWidth(1)

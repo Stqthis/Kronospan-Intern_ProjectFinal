@@ -49,27 +49,46 @@ from jarvisman.ui.chart_selector import ChartTypeSelector, DataSummaryPanel
 # signature clay/terracotta accent. Mirrors ThemeManager.LIGHT_THEME
 # so first paint matches the default (light) theme.
 THEME = {
-        "bg": "#faf9f5",
+        "bg": "#f5f8fc",
         "panel": "#ffffff",
-        "panel2": "#f0eee7",
-        "border": "#e3e0d6",
-        "text": "#2b2a27",
-        "muted": "#6f6b60",
-        "accent": "#c65d3b",
-        "accent_dim": "#f0d9cf",
+        "panel2": "#e9f0f8",
+        "border": "#d5e0ee",
+        "text": "#16273c",
+        "muted": "#5b6b81",
+        "accent": "#0f5aa8",
+        "accent_dim": "#d8e6f5",
         "accent_text": "#ffffff",
-        "accent_hover": "#a84a2e",
+        "accent_hover": "#0c4886",
         "bot": "#ffffff",
-        "ok": "#3d8b52",
+        "ok": "#2e7d4f",
         "err": "#c0392b",
         "warn": "#b7791f",
-        "code_bg": "#f4f2ec",
-        "grid": "#e3e0d6",
+        "code_bg": "#eef3fa",
+        "grid": "#d5e0ee",
     "cycle": [
-        "#c65d3b", "#3d8b52", "#b7791f", "#3a6ea5", "#8a5cae",
-        "#2f9488", "#c1567f", "#a8863f", "#5a9e64", "#d4834f",
+        "#0f5aa8", "#2e7d4f", "#b7791f", "#c0563f", "#7a5cae",
+        "#2f8f9e", "#c1567f", "#5b6b81", "#3f7fd1", "#8f7a3f",
     ],
 }
+
+def _down_arrow_svg(color: str) -> str:
+    """Write a small chevron SVG in the theme colour and return its path (QSS
+    ::down-arrow needs an image; Qt renders border-triangles as bars)."""
+    import os as _os, tempfile as _tf
+    safe = color.lstrip("#")
+    path = _os.path.join(_tf.gettempdir(), f"jarvis_arrow_{safe}.svg")
+    if not _os.path.exists(path):
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(
+                    f'<svg xmlns="http://www.w3.org/2000/svg" width="10" '
+                    f'height="7" viewBox="0 0 10 7"><path d="M1 1.5 L5 5.5 '
+                    f'L9 1.5" fill="none" stroke="{color}" stroke-width="1.8" '
+                    f'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+        except Exception:
+            return ""
+    return path.replace("\\", "/")
+
 
 # back-compat aliases (other modules/tests import these)
 USER_COLOR = THEME["accent"]
@@ -113,6 +132,7 @@ _UI = {
             "Directorships as at 31/12/2024",
         ],
         "visualize": "\U0001F4CA  Visualize / breakdown",
+        "show_table": "\u25a6  Show table ({rows} rows \u00d7 {cols} columns)",
         "thinking": "{name} is thinking \u2026",
     },
     "el": {
@@ -150,6 +170,7 @@ _UI = {
             "\u0394\u03b9\u03b5\u03c5\u03b8\u03c5\u03bd\u03c4\u03ad\u03c2 \u03c9\u03c2 31/12/2024",
         ],
         "visualize": "\U0001F4CA  \u0393\u03c1\u03ac\u03c6\u03b7\u03bc\u03b1 / \u03b1\u03bd\u03ac\u03bb\u03c5\u03c3\u03b7",
+        "show_table": "\u25a6  \u03a0\u03af\u03bd\u03b1\u03ba\u03b1\u03c2 ({rows} \u03b3\u03c1\u03b1\u03bc\u03bc\u03ad\u03c2 \u00d7 {cols} \u03c3\u03c4\u03ae\u03bb\u03b5\u03c2)",
         "thinking": "\u039f {name} \u03c3\u03ba\u03ad\u03c6\u03c4\u03b5\u03c4\u03b1\u03b9 \u2026",
     },
 }
@@ -176,6 +197,11 @@ def _qss() -> str:
         border: 1px solid {T['border']}; border-radius: 8px;
         padding: 7px 10px; selection-background-color: {T['accent_dim']}; }}
     QComboBox:focus, QLineEdit:focus {{ border: 1px solid {T['accent']}; }}
+    QComboBox::drop-down {{ border: none; background: transparent;
+        width: 26px; subcontrol-origin: padding;
+        subcontrol-position: center right; }}
+    QComboBox::down-arrow {{ image: url({_down_arrow_svg(T['muted'])});
+        width: 10px; height: 7px; margin-right: 9px; }}
     QComboBox QAbstractItemView {{ background: {T['panel2']};
         color: {T['text']}; selection-background-color: {T['accent_dim']};
         border: 1px solid {T['border']}; outline: none; }}
@@ -184,9 +210,9 @@ def _qss() -> str:
         padding: 8px 14px; }}
     QPushButton:hover {{ border: 1px solid {T['accent']}; }}
     QPushButton:disabled {{ color: {T['muted']}; }}
-    QPushButton#primary {{ background: {T['accent']}; color: #06121f;
+    QPushButton#primary {{ background: {T['accent']}; color: {T['accent_text']};
         border: none; font-weight: 700; }}
-    QPushButton#primary:hover {{ background: #5aa6ff; }}
+    QPushButton#primary:hover {{ background: {T['accent_hover']}; }}
     QPushButton#primary:disabled {{ background: {T['panel2']};
         color: {T['muted']}; }}
     QToolButton {{ background: transparent; color: {T['muted']};
@@ -243,6 +269,9 @@ class MainWindow(QMainWindow):
         self._pending_options: list[str] = []
         self._prov_store: dict[str, str] = {}
         self._chart_store: dict[str, tuple] = {}   # key -> (title, headers, rows)
+        self._table_store: dict[str, tuple] = {}   # key -> (headers, rows)
+        self._table_seq = 0
+        self._pending_big_table = None             # (key, nrows, ncol) for the chip
         self._chart_windows: list = []             # keep dialog refs alive
         self._chart_seq = 0
         self._buf = None              # when a list, _append_html buffers into it
@@ -700,6 +729,7 @@ class MainWindow(QMainWindow):
             html_content = html_content.replace(old_theme['panel2'], T['panel2'])
             html_content = html_content.replace(old_theme['border'], T['border'])
             html_content = html_content.replace(old_theme['code_bg'], T['code_bg'])
+            html_content = html_content.replace(old_theme['muted'], T['muted'])
             
             # Re-apply the updated HTML
             self.chat.setHtml(html_content)
@@ -795,16 +825,10 @@ class MainWindow(QMainWindow):
             self.chat.setVisible(True)
 
     # typing indicator
-    def _on_progress(self, msg: str) -> None:
-        """Capture the pipeline's current stage for the header indicator."""
-        self._current_stage = msg or ""
-        self.status.showMessage(msg)
-
     def _start_typing(self) -> None:
         from time import time
         self._typing_dots = 0
-        self._typing_start_time = time()
-        self._current_stage = ""
+        self._typing_start_time = time()  # ← ADD THIS
         if not hasattr(self, "_typing_timer"):
             self._typing_timer = QTimer(self)
             self._typing_timer.timeout.connect(self._tick_typing)
@@ -813,19 +837,17 @@ class MainWindow(QMainWindow):
 
     def _tick_typing(self) -> None:
         self._typing_dots = (self._typing_dots + 1) % 4
-
+        
+        # Calculate elapsed time if timer started
         elapsed = ""
         if hasattr(self, '_typing_start_time'):
             from time import time
             elapsed_sec = int(time() - self._typing_start_time)
             if elapsed_sec > 0:
                 elapsed = f" ({elapsed_sec}s)"
-
+        
         base = _t("thinking").format(name=cfg.ASSISTANT_NAME).rstrip(" .\u2026")
-        dots = "\u00b7" * self._typing_dots
-        stage = (getattr(self, "_current_stage", "") or "").rstrip(" .\u2026")
-        stage_txt = f"  —  {stage}" if stage else ""
-        self.typing_label.setText(f"{base} {dots}{stage_txt}{elapsed}")
+        self.typing_label.setText(base + " " + "\u00b7" * self._typing_dots + elapsed)
 
     def _stop_typing(self) -> None:
         if hasattr(self, "_typing_timer"):
@@ -943,7 +965,7 @@ class MainWindow(QMainWindow):
         self._set_busy(True, "Indexing documents…")
         
         worker = Worker(self.rag.index_documents, list(self.pending_files))
-        worker.signals.progress.connect(self._on_progress)
+        worker.signals.progress.connect(lambda m: self.status.showMessage(m))
         worker.signals.result.connect(self._on_index_built)
         worker.signals.error.connect(self._on_index_error)
         worker.signals.finished.connect(lambda: self._set_busy(False))
@@ -960,9 +982,20 @@ class MainWindow(QMainWindow):
         self._refresh_index_label()
         self._update_badges()
         self._update_welcome()
+        detail = ""
+        try:
+            items = [f"{k} ({df.shape[0]}\u00d7{df.shape[1]})"
+                     for k, df in list(dataframes.items())[:10]]
+            if items:
+                more = len(dataframes) - len(items)
+                detail = " Tables: " + "; ".join(items) + (
+                    f"; and {more} more." if more > 0 else ".")
+        except Exception:
+            detail = ""
         self._system_line(
             f"Indexed {stats['files']} file(s): {stats['pdf_chunks']} text "
-            f"chunk(s) from PDFs, {stats['tables']} table(s) for querying.",
+            f"chunk(s) from PDFs, {stats['tables']} table(s) for querying."
+            + detail,
             THEME["muted"])
 
     def _load_index(self) -> None:
@@ -998,6 +1031,8 @@ class MainWindow(QMainWindow):
         self._pending_options = []
         self._prov_store.clear()
         self._chart_store.clear()
+        self._table_store.clear()
+        self._pending_big_table = None
         if hasattr(self, "_last_question"):
             self._last_question = ""
         self._render_welcome()
@@ -1005,9 +1040,32 @@ class MainWindow(QMainWindow):
 
     def _clear_index(self) -> None:
         self.store.reset()
+        # With incremental updates, Clear is the ONE explicit wipe: remove the
+        # persisted artifacts too, or the next build would merge them back in.
+        try:
+            import os as _os
+            for fname in ("tables.pkl", "index.faiss", "meta.pkl",
+                          "table_profile.json", "profile.json",
+                          "table_cards.json", "cards.json",
+                          "semantic_model.pkl", "plan_cache.json"):
+                fp = _os.path.join(cfg.INDEX_DIR, fname)
+                if _os.path.exists(fp):
+                    _os.remove(fp)
+        except Exception:
+            pass
+        # Drop the semantic ghosts too: a cleared session must not keep a
+        # model/profile/cards built for data that is no longer loaded.
+        for attr, empty in (("semantic_model", None), ("table_profile", {}),
+                            ("table_cards", {}), ("relationships", {})):
+            try:
+                setattr(self.rag, attr, empty)
+            except Exception:
+                pass
         self.agent.dataframes = {}
         self.pending_files.clear()
         self.file_list.clear()
+        self._table_store.clear()
+        self._pending_big_table = None
         self._refresh_index_label()
         self._update_badges()
         self._update_welcome()
@@ -1034,10 +1092,12 @@ class MainWindow(QMainWindow):
         self._last_question = text
         self._add_user_message(text)
         self._start_assistant_line()
+        import time as _time
+        self._q_t0 = _time.monotonic()
         self._set_busy(True, "Working \u2026")
         worker = Worker(self.agent.handle, text)
         worker.signals.token.connect(self._append_token)
-        worker.signals.progress.connect(self._on_progress)
+        worker.signals.progress.connect(lambda m: self.status.showMessage(m))
         worker.signals.result.connect(self._on_answer)
         worker.signals.error.connect(self._on_answer_error)
         worker.signals.finished.connect(lambda: self._set_busy(False))
@@ -1126,6 +1186,25 @@ class MainWindow(QMainWindow):
         return headers, body
 
     # ------------------------------------------------------------------ #
+    # Big-result gating                                                   #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _table_too_big(headers: list, rows: list) -> bool:
+        """A result the chat's QTextBrowser cannot show well: too many rows to
+        scan, or too many columns to fit (the document lays tables out to the
+        viewport width, so wide ones get crushed). Those open in TableWindow."""
+        return (len(rows) > getattr(cfg, "UI_TABLE_INLINE_MAX_ROWS", 12)
+                or len(headers) > getattr(cfg, "UI_TABLE_INLINE_MAX_COLS", 6))
+
+    def _stash_big_table(self, headers: list, rows: list) -> None:
+        """Hold a big result for the 'Show table' chip that _maybe_offer_chart
+        emits, so the chip shares one action row with 'Visualize'."""
+        self._table_seq += 1
+        key = f"t{self._table_seq}"
+        self._table_store[key] = (headers, rows)
+        self._pending_big_table = (key, len(rows), len(headers))
+
+    # ------------------------------------------------------------------ #
     # Interactive charts                                                  #
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -1143,26 +1222,39 @@ class MainWindow(QMainWindow):
             return False
 
     def _maybe_offer_chart(self, question: str, result: dict) -> None:
-        """If this answer has chartable tabular data, append a 'Visualize'
-        link that opens the interactive chart window for it."""
+        """One action row under the answer: 'Show table' when the result was
+        too big to inline, and 'Visualize' when it is chartable. Emitted here
+        (not in _present_answer) so the two never render as separate rows."""
         th = result.get("table_html")
         if not th:
             return
-        headers, rows = self._parse_html_table(th)
-        if not self._chartable(headers, rows):
-            return
-        self._chart_seq += 1
-        key = f"c{self._chart_seq}"
-        title = (question or "Result").strip()
-        self._chart_store[key] = (title, headers, rows)
         T = self.current_theme
-        self._append_html(
-            f'<div style="margin:6px 0 2px 0;"><a href="chart:{key}" '
-            f'style="text-decoration:none;">'
-            f'<span style="background:{T["panel2"]}; '
-            f'color:{T["accent"]}; border:1px solid {T["accent"]}; '
-            f'padding:5px 12px; border-radius:14px;">'
-            f'{_t("visualize")}</span></a></div>')
+        chips = []
+
+        def _chip(href: str, label: str) -> str:
+            return (f'<a href="{href}" style="text-decoration:none;">'
+                    f'<span style="background:{T["panel2"]}; '
+                    f'color:{T["accent"]}; border:1px solid {T["accent"]}; '
+                    f'padding:5px 12px; border-radius:14px;">{label}</span></a>')
+
+        pending = getattr(self, "_pending_big_table", None)
+        self._pending_big_table = None
+        if pending:
+            key, nrows, ncol = pending
+            chips.append(_chip(f"table:{key}",
+                               _t("show_table").format(rows=nrows, cols=ncol)))
+
+        headers, rows = self._parse_html_table(th)
+        if self._chartable(headers, rows):
+            self._chart_seq += 1
+            key = f"c{self._chart_seq}"
+            self._chart_store[key] = ((question or "Result").strip(),
+                                      headers, rows)
+            chips.append(_chip(f"chart:{key}", _t("visualize")))
+
+        if chips:
+            self._append_html(f'<div style="margin:6px 0 2px 0;">'
+                              f'{"&nbsp;".join(chips)}</div>')
 
     def _open_chart(self, key: str) -> None:
         data = self._chart_store.get(key)
@@ -1179,6 +1271,27 @@ class MainWindow(QMainWindow):
             win.show()
         except Exception as exc:  # never let a chart failure break the chat
             self.status.showMessage(f"Could not open chart: {exc}", 6000)
+
+    def _open_table(self, key: str) -> None:
+        """Open a big result in a real QTableWidget: native horizontal scroll,
+        click-to-sort and resizable columns -- none of which a QTextBrowser can
+        do. Kept in _table_store (not popped) so it can be reopened."""
+        data = self._table_store.get(key)
+        if not data:
+            self.status.showMessage(
+                "That table belongs to an earlier answer.", 5000)
+            return
+        headers, rows = data
+        try:
+            from jarvisman.ui.table_window import TableWindow
+            win = TableWindow.from_table(
+                getattr(self, "_last_question", "") or "Result",
+                headers, rows, theme=self.current_theme, parent=self)
+            self._chart_windows.append(win)   # same list keeps it alive
+            win.show()
+            win.raise_()
+        except Exception as exc:  # never let it break the chat
+            self.status.showMessage(f"Could not open table: {exc}", 6000)
 
     def _render_options(self, options: list) -> None:
         self._opt_gen = getattr(self, "_opt_gen", 0) + 1
@@ -1198,6 +1311,8 @@ class MainWindow(QMainWindow):
     def _present_answer(self, question: str, result: dict) -> bool:
         """Render a polished answer: a heading restating the question, then
         bullets (CODE Name) for short entity lists, or a clean labeled table.
+        Big results are collapsed behind a single action chip (emitted by
+        _maybe_offer_chart, so 'Show table' and 'Visualize' share one row).
         Returns True if it handled rendering. Presentation only -- the numbers
         and rows are exactly what the engine produced."""
         th = result.get("table_html")
@@ -1254,6 +1369,13 @@ class MainWindow(QMainWindow):
             self._append_html("".join(out))
             return True
 
+        # too big to read inline -> stash it; _maybe_offer_chart puts the
+        # 'Show table' chip in the SAME action row as 'Visualize'
+        if self._table_too_big(headers, rows):
+            self._stash_big_table(headers, rows)
+            self._append_html("".join(out))      # heading only
+            return True
+
         # otherwise: a clean styled table under the heading. With animations
         # on, defer the table so it can be revealed row-by-row after the card
         # is placed (see _flush_pending_table); the heading is shown now.
@@ -1266,10 +1388,27 @@ class MainWindow(QMainWindow):
         self._append_html("".join(out))
         return True
 
+    def _append_reply_time(self) -> None:
+        """One muted line under the finished answer: how long it took. Shown
+        only AFTER completion (the status bar covers 'during')."""
+        t0 = getattr(self, "_q_t0", None)
+        if t0 is None:
+            return
+        import time as _time
+        secs = _time.monotonic() - t0
+        self._q_t0 = None
+        label = (f"{secs:.1f}s" if secs < 120
+                 else f"{int(secs // 60)}m {int(secs % 60)}s")
+        T = self.current_theme
+        self._append_html(
+            f'<div style="color:{T["muted"]}; font-size:10px; '
+            f'margin:2px 0 6px 0;">\u23f1 answered in {label}</div>')
+
     def _on_answer(self, result: dict) -> None:
         # streamed replies are already in the transcript; render extras inline
         if result.get("streamed"):
             self._render_answer(result)
+            self._append_reply_time()
             return
         # otherwise collect the whole answer and wrap it in one card
         self._buf = []
@@ -1355,6 +1494,7 @@ class MainWindow(QMainWindow):
         self.chat.setTextCursor(cur)
         self.chat.ensureCursorVisible()
         self._flush_pending_table()
+        self._append_reply_time()
 
         # Detect and show chart selector
         if result:
@@ -1410,7 +1550,14 @@ class MainWindow(QMainWindow):
         if result.get("type") == "plot" and result.get("image"):
             self._append_image(result["image"])
         if has_table:
-            self._append_html(self._styled_table(result["table_html"]))
+            # same size gate as _present_answer: this path serves streamed
+            # answers and unparseable tables, and must not dump a giant table
+            # into the transcript either.
+            _h, _r = self._parse_html_table(result["table_html"])
+            if _h and _r and self._table_too_big(_h, _r):
+                self._stash_big_table(_h, _r)
+            else:
+                self._append_html(self._styled_table(result["table_html"]))
         if result.get("code"):
             self._append_code(result["code"])
         options = result.get("options") or []
@@ -1439,6 +1586,13 @@ class MainWindow(QMainWindow):
     def _on_anchor(self, url) -> None:
         link = url.toString()
         
+        if link.startswith("code:"):
+            try:
+                self._toggle_code(int(link.split(":", 1)[1]))
+            except (ValueError, IndexError):
+                pass
+            return
+
         # Handle copy button
         if link.startswith("copy:"):
             key = link  # e.g., "copy:1"
@@ -1484,6 +1638,8 @@ class MainWindow(QMainWindow):
                     f'{self.current_theme["accent_dim"]}; border-radius:6px;">{block}</div>')
         elif link.startswith("chart:"):
             self._open_chart(link[6:])
+        elif link.startswith("table:"):
+            self._open_table(link[6:])
         elif link.startswith("ask:"):
             from urllib.parse import unquote
             if self.busy:
@@ -1527,11 +1683,6 @@ class MainWindow(QMainWindow):
         cur = self.chat.textCursor()
         cur.movePosition(QTextCursor.MoveOperation.End)
         return cur
-    
-    def _scroll_to_bottom(self) -> None:
-        """Pin the chat view to the true bottom on every append."""
-        bar = self.chat.verticalScrollBar()
-        bar.setValue(bar.maximum())
 
     def _append_html(self, fragment: str) -> None:
         if self._buf is not None:
@@ -1541,7 +1692,6 @@ class MainWindow(QMainWindow):
         cur = self._cursor_end()
         self.chat.setTextCursor(cur)
         self.chat.ensureCursorVisible()
-        self._scroll_to_bottom()
 
     def _append_token(self, text: str) -> None:
         if not text:
@@ -1550,13 +1700,15 @@ class MainWindow(QMainWindow):
         cur.insertText(text)
         self.chat.setTextCursor(cur)
         self.chat.ensureCursorVisible()
-        self._scroll_to_bottom()
 
     def _add_user_message(self, text: str) -> None:
         safe = html.escape(text, quote=False)
         T = self.current_theme
         self._append_html(
-            f'<div style="margin:16px 0 8px 0; text-align: right;">'
+            f'<table width="100%"><tr><td style="text-align: right;">'
+            f'<b style="color:{T["accent"]};">You&nbsp; \u25cf</b>'
+            f'</td></tr></table>'
+            f'<div style="margin:4px 0 8px 0; text-align: right;">'
             f'<span style="background:{T["accent_dim"]}; color:{T["text"]}; '
             f'padding:11px 16px; border-radius:18px; display: inline-block; '
             f'max-width:72%; text-align:left;">'
@@ -1588,15 +1740,82 @@ class MainWindow(QMainWindow):
             f'<br><img src="{url.toString()}" width="{width}"><br>')
 
     def _append_code(self, code: str) -> None:
-        escaped = html.escape(code, quote=False)
+        """Render a COLLAPSED 'Generated code' disclosure; clicking the arrow
+        expands/hides the code inline (see _toggle_code)."""
+        self._code_counter = getattr(self, "_code_counter", 0) + 1
+        cid = self._code_counter
+        if not hasattr(self, "_code_store_src"):
+            self._code_store_src = {}
+            self._code_expanded = set()
+        self._code_store_src[cid] = code
         T = self.current_theme
         self._append_html(
-            f'<div style="color:{T["muted"]}; font-size:11px; '
-            f'margin-top:8px;">Generated code</div>'
-            f'<pre style="background:{T["code_bg"]}; color:{T["text"]}; '
-            f'padding:10px 12px; border-radius:8px; font-size:12px; '
-            f'white-space:pre-wrap; border:1px solid {T["border"]};">'
-            f'{escaped}</pre>')
+            f'<div style="margin-top:8px; font-size:11px;">'
+            f'<a href="code:{cid}" style="color:{T["muted"]}; '
+            f'text-decoration:none;">\u25b8 Generated code</a></div>')
+
+    def _find_anchor_fragment(self, href: str):
+        """Locate the text fragment carrying ``href`` in the transcript.
+        Returns (position, length, block) or None."""
+        doc = self.chat.document()
+        block = doc.begin()
+        while block.isValid():
+            it = block.begin()
+            while not it.atEnd():
+                frag = it.fragment()
+                if frag.isValid() and frag.charFormat().anchorHref() == href:
+                    return frag.position(), frag.length(), block
+                it += 1
+            block = block.next()
+        return None
+
+    def _toggle_code(self, cid: int) -> None:
+        href = f"code:{cid}"
+        hit = self._find_anchor_fragment(href)
+        code = getattr(self, "_code_store_src", {}).get(cid)
+        if hit is None or code is None:
+            return
+        pos, ln, block = hit
+        T = self.current_theme
+        lines = code.splitlines() or [code]
+        expanded = cid in self._code_expanded
+        if expanded:
+            # The code occupies the blocks right after the link's block, one
+            # per code line; match them by content and remove the whole run.
+            b, li, last = block.next(), 0, None
+            while b.isValid() and li < len(lines):
+                if not b.text().strip():          # spacer block from insertion
+                    last, b = b, b.next()
+                    continue
+                if b.text().strip() != lines[li].strip():
+                    break
+                last, li, b = b, li + 1, b.next()
+            if last is not None and li == len(lines):
+                c2 = QTextCursor(self.chat.document())
+                c2.setPosition(block.position() + block.length() - 1)
+                c2.setPosition(last.position() + last.length() - 1,
+                               QTextCursor.MoveMode.KeepAnchor)
+                c2.removeSelectedText()
+            self._code_expanded.discard(cid)
+        else:
+            c2 = QTextCursor(self.chat.document())
+            c2.setPosition(block.position() + block.length() - 1)
+            c2.insertBlock()                      # code gets its own block(s)
+            escaped = html.escape(code, quote=False)
+            c2.insertHtml(
+                f'<pre style="background:{T["code_bg"]}; color:{T["text"]}; '
+                f'padding:6px 12px; border-radius:8px; font-size:12px; '
+                f'white-space:pre-wrap; border:1px solid {T["border"]};">'
+                f'{escaped}</pre>')
+            self._code_expanded.add(cid)
+        # flip the disclosure arrow (the link itself keeps its href)
+        arrow = "\u25be" if cid in self._code_expanded else "\u25b8"
+        c3 = QTextCursor(self.chat.document())
+        c3.setPosition(pos)
+        c3.setPosition(pos + ln, QTextCursor.MoveMode.KeepAnchor)
+        c3.insertHtml(
+            f'<a href="code:{cid}" style="color:{T["muted"]}; '
+            f'text-decoration:none;">{arrow} Generated code</a>')
 
     # ------------------------------------------------------------------ #
     def _set_busy(self, busy: bool, message: Optional[str] = None) -> None:
@@ -1663,6 +1882,11 @@ class MainWindow(QMainWindow):
             border: 1px solid {T['border']}; border-radius: 12px;
             padding: 8px 12px; selection-background-color: {T['accent_dim']}; }}
         QComboBox:focus, QLineEdit:focus {{ border: 1px solid {T['accent']}; }}
+        QComboBox::drop-down {{ border: none; background: transparent;
+            width: 26px; subcontrol-origin: padding;
+            subcontrol-position: center right; }}
+        QComboBox::down-arrow {{ image: url({_down_arrow_svg(T['muted'])});
+            width: 10px; height: 7px; margin-right: 9px; }}
         QComboBox QAbstractItemView {{ background: {T['panel2']};
             color: {T['text']}; selection-background-color: {T['accent_dim']};
             border: 1px solid {T['border']}; outline: none; }}

@@ -110,9 +110,12 @@ def _profile_one(ollama, chat_model: str, name: str, df) -> dict:
     {"summary": str, "columns": {col: {"type","format","meaning"}}} with keys
     normalised back onto the real columns. Empty/safe on any failure."""
     try:
+        # one JSON entry per column: budget scales with width, hard-capped
+        budget = min(4096, 300 + 60 * max(1, len(df.columns)))
         raw = ollama.chat(
             chat_model, [{"role": "user", "content": _prompt(name, df)}],
-            options={"temperature": 0.0, "num_ctx": 8192},
+            options={"temperature": 0.0, "num_ctx": 8192,
+                     "num_predict": budget},
             format="json",
         )
     except Exception:

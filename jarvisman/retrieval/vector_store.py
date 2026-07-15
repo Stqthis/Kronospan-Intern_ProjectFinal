@@ -37,6 +37,55 @@ class VectorStore:
         self.chunks = list(chunks)
         self.embed_model = embed_model
 
+    def append(self, embeddings: np.ndarray, chunks: list[dict],
+               embed_model: str) -> None:
+        """Add new chunks to an EXISTING index (incremental updates). The new
+        chunks get ids continuing after the current ones. Falls back to a full
+        build when the store is empty or the embed model changed (vectors from
+        different models are not comparable)."""
+        if self.index is None or self.count == 0 \
+                or (self.embed_model and embed_model != self.embed_model):
+            return self.build(embeddings, chunks, embed_model)
+        emb = np.ascontiguousarray(embeddings, dtype="float32")
+        if emb.ndim != 2 or emb.shape[0] != len(chunks):
+            raise ValueError("Embedding matrix shape does not match number of chunks.")
+        faiss.normalize_L2(emb)
+        base = len(self.chunks)
+        added = []
+        for j, ch in enumerate(chunks):
+            ch = dict(ch)
+            ch["chunk_id"] = base + j
+            added.append(ch)
+        self.index.add(emb)
+        self.chunks.extend(added)
+
+    def remove_sources(self, sources: set) -> int:
+        """Drop every chunk whose source file is in ``sources`` (used when a
+        file is RE-indexed, so its old chunks don't duplicate the new ones).
+        Vectors are recovered from the flat index and the index is rebuilt.
+        Returns the number of removed chunks."""
+        if self.index is None or not self.chunks or not sources:
+            return 0
+        keep = [i for i, c in enumerate(self.chunks)
+                if c.get("source") not in sources]
+        removed = len(self.chunks) - len(keep)
+        if removed == 0:
+            return 0
+        if keep:
+            vecs = np.vstack([self.index.reconstruct(i) for i in keep])
+        else:
+            vecs = np.zeros((0, self.dim or 1), dtype="float32")
+        kept_chunks = []
+        for j, i in enumerate(keep):
+            ch = dict(self.chunks[i])
+            ch["chunk_id"] = j
+            kept_chunks.append(ch)
+        self.index = faiss.IndexFlatIP(self.dim)
+        if len(kept_chunks):
+            self.index.add(np.ascontiguousarray(vecs, dtype="float32"))
+        self.chunks = kept_chunks
+        return removed
+
     def search(self, query_emb: np.ndarray, k: int) -> list[tuple[float, dict]]:
         if self.index is None or self.count == 0:
             return []

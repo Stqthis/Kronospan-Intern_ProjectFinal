@@ -45,7 +45,7 @@ LIST_TIMEOUT = (5, 20)
 # reload. There is ample unified memory to hold it; set a duration like "30m"
 # to release it when idle.
 KEEP_ALIVE = os.environ.get("RAG_KEEP_ALIVE", "-1")
-EMBED_BATCH_SIZE = 16
+EMBED_BATCH_SIZE = int(os.environ.get("RAG_EMBED_BATCH", "64"))
 
 # --------------------------------------------------------------------------- #
 # Retrieval / chunking                                                        #
@@ -138,6 +138,19 @@ DEGENERATE_MAX_DISTINCT = int(os.environ.get("RAG_DEGENERATE_MAX_DISTINCT", "3")
 NUM_CTX = int(os.environ.get("RAG_NUM_CTX", "8192"))
 
 # --------------------------------------------------------------------------- #
+# Determinism / reproducibility                                               #
+# --------------------------------------------------------------------------- #
+# The single biggest lever for answer CONSISTENCY. A fixed seed makes Ollama's
+# sampling reproducible, so the same question yields the same plan, the same
+# generated code, and the same phrased answer on every run instead of a fresh
+# dice roll. Combined with greedy decoding (temperature 0) on the fact-
+# producing stages, identical input -> identical output. Set RAG_SEED to any
+# int to shift the (repeatable) tie-breaks; RAG_DETERMINISTIC=0 restores the
+# old sampled behaviour if you ever want variety over reproducibility.
+DETERMINISTIC = os.environ.get("RAG_DETERMINISTIC", "1") == "1"
+LLM_SEED = int(os.environ.get("RAG_SEED", "42"))
+
+# --------------------------------------------------------------------------- #
 # Semantic model / reasoning layer                                            #
 # --------------------------------------------------------------------------- #
 PROFILE_TOP_K = 12
@@ -174,6 +187,8 @@ CHART_ANIM_INTERVAL_MS = int(os.environ.get("RAG_CHART_ANIM_MS", "22"))
 SYNTHESIZE_MAX_ROWS = int(os.environ.get("RAG_SYNTH_MAX_ROWS", "3"))
 MAX_ANALYSIS_TABLES_REASONER = int(os.environ.get("RAG_MAX_TABLES", "6"))
 PROMPT_MEANING_MAX_CHARS = 80
+UI_TABLE_INLINE_MAX_ROWS = int(os.environ.get("RAG_UI_TABLE_ROWS", "12"))
+UI_TABLE_INLINE_MAX_COLS = int(os.environ.get("RAG_UI_TABLE_COLS", "6"))
 
 # --------------------------------------------------------------------------- #
 # Feature flags (each phase independently switchable; 1/0 via env)            #
