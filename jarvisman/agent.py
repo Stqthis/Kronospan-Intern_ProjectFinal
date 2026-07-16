@@ -405,16 +405,20 @@ class Agent:
         if len(self.dataframes) <= 1:
             return self.dataframes
 
-        # Content routing first: a snapshot date, period, or entity value in
-        # the question settles same-schema files that _score_tables ranks as a
-        # dead tie (and it stops the model reaching into the wrong sheet).
+        # Content routing FIRST. _score_tables ranks same-schema sheets as a
+        # dead tie, and this is a SECOND, independent table selector (the plan
+        # tier has its own): a fix applied only there leaves codegen still
+        # reaching into the wrong sheet.
         if self.semantic_model is not None:
-            from jarvisman.semantics.semantic_model import content_route
-            routed = content_route(query, self.semantic_model,
-                                   max_n=self.MAX_ANALYSIS_TABLES)
-            if routed:
-                return {n: self.dataframes[n] for n in routed
-                        if n in self.dataframes}
+            try:
+                from jarvisman.semantics.semantic_model import content_route
+                routed = content_route(query, self.semantic_model,
+                                       max_n=self.MAX_ANALYSIS_TABLES)
+                if routed:
+                    return {n: self.dataframes[n] for n in routed
+                            if n in self.dataframes}
+            except Exception:
+                pass          # routing is an optimisation; never break the path
 
         scored = self._score_tables(query)
         best_score, best_name = scored[0]
@@ -1101,6 +1105,8 @@ class Agent:
                 res["table_html"] = outcome.table_html
                 res["provenance"] = outcome.provenance
                 res["trace"] = outcome.trace
+                res["prose"] = outcome.prose
+                res["row_count"] = outcome.row_count
                 if outcome.image:
                     res["type"] = "plot"
                     res["image"] = outcome.image

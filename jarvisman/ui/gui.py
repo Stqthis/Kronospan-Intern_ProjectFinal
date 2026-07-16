@@ -133,6 +133,7 @@ _UI = {
         ],
         "visualize": "\U0001F4CA  Visualize / breakdown",
         "show_table": "\u25a6  Show table ({rows} rows \u00d7 {cols} columns)",
+        "show_table_capped": "\u25a6  Show table ({shown} of {total} rows \u00d7 {cols} columns)",
         "thinking": "{name} is thinking \u2026",
     },
     "el": {
@@ -171,6 +172,7 @@ _UI = {
         ],
         "visualize": "\U0001F4CA  \u0393\u03c1\u03ac\u03c6\u03b7\u03bc\u03b1 / \u03b1\u03bd\u03ac\u03bb\u03c5\u03c3\u03b7",
         "show_table": "\u25a6  \u03a0\u03af\u03bd\u03b1\u03ba\u03b1\u03c2 ({rows} \u03b3\u03c1\u03b1\u03bc\u03bc\u03ad\u03c2 \u00d7 {cols} \u03c3\u03c4\u03ae\u03bb\u03b5\u03c2)",
+        "show_table_capped": "\u25a6  \u03a0\u03af\u03bd\u03b1\u03ba\u03b1\u03c2 ({shown} \u03b1\u03c0\u03cc {total} \u03b3\u03c1\u03b1\u03bc\u03bc\u03ad\u03c2 \u00d7 {cols} \u03c3\u03c4\u03ae\u03bb\u03b5\u03c2)",
         "thinking": "\u039f {name} \u03c3\u03ba\u03ad\u03c6\u03c4\u03b5\u03c4\u03b1\u03b9 \u2026",
     },
 }
@@ -1196,13 +1198,19 @@ class MainWindow(QMainWindow):
         return (len(rows) > getattr(cfg, "UI_TABLE_INLINE_MAX_ROWS", 12)
                 or len(headers) > getattr(cfg, "UI_TABLE_INLINE_MAX_COLS", 6))
 
-    def _stash_big_table(self, headers: list, rows: list) -> None:
+    def _stash_big_table(self, headers: list, rows: list,
+                         total_rows: Optional[int] = None) -> None:
         """Hold a big result for the 'Show table' chip that _maybe_offer_chart
-        emits, so the chip shares one action row with 'Visualize'."""
+        emits, so the chip shares one action row with 'Visualize'.
+
+        total_rows is the TRUE count from the engine; rows may be fewer
+        (QUERY_MAX_TABLE_ROWS caps the HTML), and the chip must say so rather
+        than report the capped number as if it were the whole answer."""
         self._table_seq += 1
         key = f"t{self._table_seq}"
-        self._table_store[key] = (headers, rows)
-        self._pending_big_table = (key, len(rows), len(headers))
+        total = total_rows or len(rows)
+        self._table_store[key] = (headers, rows, total)
+        self._pending_big_table = (key, len(rows), len(headers), total)
 
     # ------------------------------------------------------------------ #
     # Interactive charts                                                  #
@@ -1240,9 +1248,12 @@ class MainWindow(QMainWindow):
         pending = getattr(self, "_pending_big_table", None)
         self._pending_big_table = None
         if pending:
-            key, nrows, ncol = pending
-            chips.append(_chip(f"table:{key}",
-                               _t("show_table").format(rows=nrows, cols=ncol)))
+            key, nrows, ncol, total = pending
+            label = (_t("show_table_capped").format(shown=nrows, total=total,
+                                                    cols=ncol)
+                     if total > nrows else
+                     _t("show_table").format(rows=nrows, cols=ncol))
+            chips.append(_chip(f"table:{key}", label))
 
         headers, rows = self._parse_html_table(th)
         if self._chartable(headers, rows):
@@ -1281,12 +1292,13 @@ class MainWindow(QMainWindow):
             self.status.showMessage(
                 "That table belongs to an earlier answer.", 5000)
             return
-        headers, rows = data
+        headers, rows, total = data
         try:
             from jarvisman.ui.table_window import TableWindow
             win = TableWindow.from_table(
                 getattr(self, "_last_question", "") or "Result",
-                headers, rows, theme=self.current_theme, parent=self)
+                headers, rows, theme=self.current_theme, parent=self,
+                total_rows=total)
             self._chart_windows.append(win)   # same list keeps it alive
             win.show()
             win.raise_()
@@ -1372,7 +1384,7 @@ class MainWindow(QMainWindow):
         # too big to read inline -> stash it; _maybe_offer_chart puts the
         # 'Show table' chip in the SAME action row as 'Visualize'
         if self._table_too_big(headers, rows):
-            self._stash_big_table(headers, rows)
+            self._stash_big_table(headers, rows, result.get("row_count"))
             self._append_html("".join(out))      # heading only
             return True
 
@@ -1529,6 +1541,10 @@ class MainWindow(QMainWindow):
                     self._append_html(
                         f'<span style="color:{THEME["muted"]}; '
                         f'font-size:12px;">{html.escape(m.group(0))}</span>')
+                elif presented and result.get("prose") and text.strip():
+                    # judgement/comparison: the table alone does NOT answer the
+                    # question, so the phrased answer must be shown
+                    self._append_html(self._md_to_html(text))
                 elif not presented and text and "\n" not in text.strip():
                     self._append_html(self._md_to_html(text))
                 if presented:
@@ -1555,7 +1571,7 @@ class MainWindow(QMainWindow):
             # into the transcript either.
             _h, _r = self._parse_html_table(result["table_html"])
             if _h and _r and self._table_too_big(_h, _r):
-                self._stash_big_table(_h, _r)
+                self._stash_big_table(_h, _r, result.get("row_count"))
             else:
                 self._append_html(self._styled_table(result["table_html"]))
         if result.get("code"):

@@ -42,6 +42,53 @@ _CHART_WORD_RE = re.compile(
     r"διάγραμμα|πιτα|πίτα)\b", re.IGNORECASE)
 
 
+_PROSE_INTENT_RE = re.compile(
+    r"\b(compare[ds]?|comparison|versus|vs\.?|differenc\w*|"
+    r"explain|why|reason\w*|"
+    r"opinion|think|thoughts|view|recommend\w*|suggest\w*|advi[sc]e|"
+    r"assess\w*|evaluate|analys[ei]s|interpret\w*|"
+    r"summar\w+|overview|insight\w*|takeaway\w*|"
+    r"better|best|worse|worst|strongest|weakest|riskiest|safest|"
+    r"trend\w*|pattern\w*|notable|unusual|stands? ?out|concerning|"
+    r"should (we|i|they)|what do you)\b", re.I)
+
+
+def sibling_choice(question, model, dataframes, max_opts: int = 12):
+    """No period/entity signal + several SAME-SCHEMA sheets -> ask which one.
+
+    content_route() settles any question that names a date, period or entity.
+    What is left is genuinely ambiguous ("what is the total?" across 12 monthly
+    files) and must be asked about, not guessed -- guessing silently is the bug
+    this whole path exists to kill.
+
+    -> (clarify_question, options) or (None, None)."""
+    from jarvisman.semantics.semantic_model import content_route
+    from jarvisman.semantics.table_cards import filename_asof
+    names = [n for n in model.table_names() if n in dataframes]
+    if len(names) < 2 or content_route(question, model):
+        return None, None                # a signal exists -> routing handles it
+    sig = {}
+    for n in names:
+        t = model.tables.get(n)
+        if t is None:
+            continue
+        key = tuple(sorted(str(c.name) for c in t.columns))
+        sig.setdefault(key, []).append(n)
+    if not sig:
+        return None, None
+    group = max(sig.values(), key=len)
+    if len(group) < 2:
+        return None, None                # schemas differ -> not this problem
+    opts = []
+    for n in group[:max_opts]:
+        d = filename_asof(n)
+        opts.append({"label": d or n.split(":")[0], "table": n,
+                     "suffix": f" as at {d}" if d else f" in file {n.split(':')[0]}"})
+    opts.sort(key=lambda o: o["label"])
+    return ("Those sheets all hold the same kind of data. "
+            "Which one do you mean?", opts)
+
+
 @dataclass
 class ReasonerOutcome:
     kind: str                       # 'ok' | 'clarify' | 'fallback'
@@ -55,6 +102,8 @@ class ReasonerOutcome:
     evidence_block: str = ""
     notes: list = field(default_factory=list)
     trace: list = field(default_factory=list)    # human-readable decision log
+    prose: bool = False          # answer is a judgement; the UI must show text
+    row_count: Optional[int] = None   # TRUE rows, before any display cap
 
 
 class TableReasoner:
@@ -124,6 +173,13 @@ class TableReasoner:
         self.pending_clarify = None       # one clarification max, ever
         if chosen is None:
             return None
+        if p.get("kind") == "table_choice":
+            # Rewrite the question with the chosen period and re-run:
+            # content_route() then resolves it deterministically, so there is
+            # exactly one place that decides which sheet answers a question.
+            q = p["question"].rstrip("? ")
+            return {"question": q + chosen["suffix"] + "?",
+                    "bind": None, "term": ""}
         if p.get("kind") == "proposal":
             # yes -> re-run the original question with the model's
             # accept_directive enforced; no/anything else -> stop gracefully
@@ -282,6 +338,20 @@ class TableReasoner:
             trace.append("user chose an interpretation: " + directive[:120])
         # one clarification max per question
         self.pending_clarify = None
+
+        # Nothing in the question says WHICH sibling sheet is meant. Ask --
+        # picking one silently is the original bug. content_route() has already
+        # had its chance, so anything reaching here is genuinely ambiguous.
+        if forced_bind is None and not directive:
+            cq, copts = sibling_choice(question, self.model, self.dataframes)
+            if cq:
+                self.pending_clarify = {"question": question, "term": "",
+                                        "kind": "table_choice",
+                                        "options": copts}
+                return ReasonerOutcome(
+                    kind="clarify", text=cq,
+                    options=[o["label"] for o in copts],
+                    evidence_block=ev_block, trace=trace)
 
         tables = self._planner_tables(evidence)
 
@@ -461,8 +531,11 @@ class TableReasoner:
                                notes=plres.notes)
 
     def _planner_tables(self, evidence: Evidence) -> dict:
-        """Narrow to the sheet(s) the question is actually about, best-first,
-        so the planner never has to break a tie between identical schemas."""
+        """Tables exposed to the planner. For small workbooks expose ALL of
+        them in stable insertion order: the schema block is then byte-identical
+        across questions, so llama.cpp prompt-prefix caching skips re-evaluating
+        it (a large CPU saving). Only large workbooks fall back to the
+        per-question evidence-ranked subset."""
         all_names = list(self.dataframes)
         if len(all_names) <= 1:
             return dict(self.dataframes)
@@ -470,20 +543,21 @@ class TableReasoner:
         from jarvisman.semantics.semantic_model import content_route
         cap = cfg.MAX_ANALYSIS_TABLES_REASONER
 
+        # A snapshot date, period or entity value in the question settles which
+        # sheet is meant. Without this the capability ranker ties across
+        # same-schema sheets and the model anchors on prompt position.
         routed = content_route(evidence.question, self.model, max_n=cap)
         value_tables = [n for n in dict.fromkeys(
             h.table for h in evidence.value_hits) if n in self.dataframes]
         lead = list(dict.fromkeys(
             n for n in (routed + value_tables) if n in self.dataframes))
-
-        if lead:                                   # real content signal -> trust it
+        if lead:
             return {n: self.dataframes[n] for n in lead[:cap]}
 
-        ranked = evidence.ranked_tables(cap)       # no signal: fall back
-        chosen = ranked or all_names[:cap]
+        ranked = evidence.ranked_tables(cap)
+        chosen = [n for n in ranked if n in self.dataframes] or all_names[:cap]
         return {n: self.dataframes[n] for n in chosen}
-    
-    
+
     @staticmethod
     def _first_alias(plan: QueryPlan) -> str:
         from jarvisman.planning.query_plan import PlanValidator
@@ -635,11 +709,23 @@ class TableReasoner:
         rows = result.get("row_count")
         if rows is None:
             rows = (body.count("\n") if body else 0)
-        small = rows <= getattr(cfg, "SYNTHESIZE_MAX_ROWS", 3)
-        if cfg.SYNTHESIZE_ANSWER and body and small:
+        # Gate on INTENT as well as size. A figure question is answered by its
+        # table, so phrasing it is latency for nothing. A comparison question is
+        # NOT answered by a table at all -- it needs words -- so allow the
+        # phrasing call on a larger result.
+        wants_prose = self._wants_prose(question)
+        cap = (getattr(cfg, "SYNTHESIZE_PROSE_MAX_ROWS", 40) if wants_prose
+               else getattr(cfg, "SYNTHESIZE_MAX_ROWS", 3))
+        prose_out = False
+        if cfg.SYNTHESIZE_ANSWER and body and rows <= cap:
             if progress:
                 progress("Writing the answer ...")
-            text = self._synthesize(question, body, provenance) or body
+            synth = self._synthesize(question, body, provenance,
+                                     prose=wants_prose)
+            if synth:
+                text, prose_out = synth, wants_prose
+            else:
+                text = body
         elif body:
             how = "; ".join(e for e in bundle.explain[:4])
             if how:
@@ -650,7 +736,8 @@ class TableReasoner:
                                table_html=result.get("table_html"),
                                code=bundle.code, provenance=provenance,
                                plan_json=plan_raw, evidence_block=ev_block,
-                               notes=notes)
+                               notes=notes, prose=prose_out,
+                               row_count=result.get("row_count"))
 
     @staticmethod
     def _plan_state(plan: QueryPlan) -> dict:
@@ -716,29 +803,55 @@ class TableReasoner:
         except Exception as exc:
             cfg.dbg("reasoner._save_plan_cache", exc)
 
+    @staticmethod
+    def _wants_prose(question: str) -> bool:
+        """True when the user asked for a judgement/comparison rather than a
+        figure. Deliberately narrow: it must never fire on 'total funds per
+        currency' or 'sort interest rates' -- those already work and must not
+        pay for an extra LLM call."""
+        return bool(_PROSE_INTENT_RE.search(question or ""))
+
     def _synthesize(self, question: str, result_text: str,
-                    provenance: list) -> Optional[str]:
+                    provenance: list, prose: bool = False) -> Optional[str]:
         """One short call to phrase the computed result -- with an echo check:
         every number in the phrased answer must exist in the computed result,
         otherwise the raw result is returned instead. The model is never
         allowed to 'improve' a figure."""
         capped = result_text[:1500]
         prov = "\n".join(provenance[-6:])
-        prompt = (
-            "Write a direct 1-3 sentence answer to the user's question, in the "
-            "same language as the question, using ONLY the computed result below. "
-            "Quote the numbers exactly as they appear; do not round, convert, or "
-            "add any figure that is not in the result. Do not mention code or "
-            "DataFrames.\n\n"
-            f"Question: {question}\n\nComputed result:\n{capped}\n\n"
-            f"How it was computed:\n{prov}\n\nAnswer:"
-        )
+        if prose:
+            # _numbers_echo_ok rejects ANY number not present in the result, so
+            # a derived figure ("EUR 200 more", "23% higher") would silently
+            # sink the whole answer back to a bare table. Demand comparative
+            # WORDS instead -- which is what the user asked for anyway.
+            head = (
+                "Answer the user's question in 2-5 sentences, in the same "
+                "language as the question, using ONLY the computed result "
+                "below. They want a judgement, not a data dump: say which is "
+                "largest and smallest, what stands out, and what it means for "
+                "them. Quote figures EXACTLY as they appear. NEVER calculate a "
+                "new number -- no differences, percentages, ratios or totals of "
+                "your own. Use words instead: 'the largest by some margin', "
+                "'roughly double', 'far behind'. Do not mention code or "
+                "DataFrames.")
+        else:
+            head = (
+                "Write a direct 1-3 sentence answer to the user's question, in "
+                "the same language as the question, using ONLY the computed "
+                "result below. Quote the numbers exactly as they appear; do not "
+                "round, convert, or add any figure that is not in the result. "
+                "Do not mention code or DataFrames.")
+        prompt = (f"{head}\n\nQuestion: {question}\n\n"
+                  f"Computed result:\n{capped}\n\n"
+                  f"How it was computed:\n{prov}\n\nAnswer:")
         try:
             out = self.ollama.chat(
                 cfg.model_for("synthesize", self.chat_model),
                 [{"role": "user", "content": prompt}],
                 options={"temperature": 0.0,
-                         "num_predict": getattr(cfg, "SYNTH_NUM_PREDICT", 220)},
+                         "num_predict": (
+                             getattr(cfg, "SYNTH_PROSE_NUM_PREDICT", 420) if prose
+                             else getattr(cfg, "SYNTH_NUM_PREDICT", 220))},
             ).strip()
         except Exception:
             return None

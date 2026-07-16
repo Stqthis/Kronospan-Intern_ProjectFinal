@@ -1,9 +1,18 @@
-{"q": "What is the total of all funds for Lignum Technologies AG in euro?", "expect": []}
-{"q": "How much money in EUR do Croatian companies hold in total?", "expect": []}
-{"q": "Total funds with Raiffeisen bank in euros", "expect": []}
-{"q": "Show the funds per currency held with CaixaBank", "expect": ["EUR"]}
+# JarvisMan question set — one JSON object per line. Blank lines and #comments ignored.
+#   q            : the question, exactly as a user would type it
+#   expect       : substrings that must appear in the answer (optional)
+#   expect_table : substring of the table name the answer MUST come from (optional)
+#
+# expect_table is the important one: it catches a right-looking number pulled
+# from the wrong sheet. Fill it in with a substring of YOUR real table names —
+# run `python test_queries.py -v` once and copy from the `table=` line.
+
+{"q": "What is the total of all type of funds of company Lignum Technologies AG in Euro equivalent as at 31.07.2023?", "expect": []}
+{"q": "What is the total of all type of funds in Euro (EUR) equivalent of all Croatian companies as at 31.07.2023?", "expect": []}
+{"q": "What is the total of all type of funds with the RBI bank in Euro (EUR) equivalent as at 31.07.2023?", "expect": []}
+{"q": "What is the total of all types of funds per Currency with the CaixaBank, S.A. bank as at 31.07.2023?", "expect": ["EUR"]}
+{"q": "Descending sort all interest rates for all Funds in Denmark and indicate their currency, company and bank held with as at 31.07.2023", "expect": []}
 {"q": "Which companies was Koutouvas Athanasios a director of at the end of 2023?", "expect": []}
-{"q": "Sort the interest rates in Denmark from highest to lowest with the company and bank", "expect": []}
 {"q": "Which companies share the same address in Italy?", "expect": []}
 {"q": "companies where Spiros Spyrou is a director", "expect": []}
 {"q": "companies where Spuros spirou is director", "expect": []}

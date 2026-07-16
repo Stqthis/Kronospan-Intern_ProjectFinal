@@ -52,11 +52,16 @@ class _NumericItem(QTableWidgetItem):
 
 class TableWindow(QDialog):
     def __init__(self, title: str, headers: list, rows: list,
-                 theme: Optional[dict] = None, parent=None) -> None:
+                 theme: Optional[dict] = None, parent=None,
+                 total_rows: Optional[int] = None) -> None:
         super().__init__(parent)
         self.theme = theme or {}
         self._headers = [str(h) for h in (headers or [])]
         self._rows = [list(r) for r in (rows or [])]
+        # TRUE row count from the engine. The HTML is capped
+        # (QUERY_MAX_TABLE_ROWS), so the caption must not present the capped
+        # number as the whole answer.
+        self._total = total_rows or len(self._rows)
         self._title = (title or "Result").strip()
         self.setWindowTitle(("Table \u2014 " + self._title)[:90])
         self.resize(980, 620)
@@ -65,8 +70,10 @@ class TableWindow(QDialog):
     # ------------------------------------------------------------------ #
     @classmethod
     def from_table(cls, title: str, headers: list, rows: list,
-                   theme: Optional[dict] = None, parent=None) -> "TableWindow":
-        return cls(title, headers, rows, theme=theme, parent=parent)
+                   theme: Optional[dict] = None, parent=None,
+                   total_rows: Optional[int] = None) -> "TableWindow":
+        return cls(title, headers, rows, theme=theme, parent=parent,
+                   total_rows=total_rows)
 
     # ------------------------------------------------------------------ #
     def _build(self) -> None:
@@ -75,7 +82,12 @@ class TableWindow(QDialog):
         root.setSpacing(8)
 
         top = QHBoxLayout()
-        cap = QLabel(f"{len(self._rows)} rows \u00d7 {len(self._headers)} columns")
+        if self._total > len(self._rows):
+            cap_txt = (f"showing {len(self._rows):,} of {self._total:,} rows "
+                       f"\u00d7 {len(self._headers)} columns \u2014 truncated")
+        else:
+            cap_txt = f"{len(self._rows):,} rows \u00d7 {len(self._headers)} columns"
+        cap = QLabel(cap_txt)
         cap.setStyleSheet(f"color:{self.theme.get('muted', '#888')};")
         top.addWidget(cap)
         top.addStretch(1)

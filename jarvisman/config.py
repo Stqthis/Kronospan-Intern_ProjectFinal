@@ -87,6 +87,10 @@ SANDBOX_CPU_LIMIT_S = int(
 # --------------------------------------------------------------------------- #
 QUERY_SAMPLE_ROWS = 10
 QUERY_MAX_RESULT_ROWS = 100
+# The plain-text rendering is read by the LLM (synthesis) and the eval, so it
+# stays small. The HTML goes to the UI, which has a scrollable TableWindow and
+# can hold far more. Two consumers, two caps.
+QUERY_MAX_TABLE_ROWS = int(os.environ.get("RAG_MAX_TABLE_ROWS", "2000"))
 CATEGORICAL_MAX_UNIQUE = 200
 ANALYSIS_MAX_RETRIES = 2
 
@@ -185,10 +189,17 @@ ANIM_TABLE_MAX_ROWS = int(os.environ.get("RAG_ANIM_MAX_ROWS", "60"))
 CHART_ANIM_FRAMES = int(os.environ.get("RAG_CHART_ANIM_FRAMES", "26"))
 CHART_ANIM_INTERVAL_MS = int(os.environ.get("RAG_CHART_ANIM_MS", "22"))
 SYNTHESIZE_MAX_ROWS = int(os.environ.get("RAG_SYNTH_MAX_ROWS", "3"))
-MAX_ANALYSIS_TABLES_REASONER = int(os.environ.get("RAG_MAX_TABLES", "6"))
-PROMPT_MEANING_MAX_CHARS = 80
+# Comparison/opinion questions need prose even when the result has many rows.
+# Pure figure questions do not: the table speaks for itself and the extra LLM
+# call is pure latency. Capped so a huge table is never fed to the model.
+SYNTHESIZE_PROSE_MAX_ROWS = int(os.environ.get("RAG_SYNTH_PROSE_MAX_ROWS", "40"))
+SYNTH_PROSE_NUM_PREDICT = int(os.environ.get("RAG_SYNTH_PROSE_NUM_PREDICT", "420"))
+# Results bigger than this open in TableWindow behind a chip instead of being
+# rendered inline (QTextBrowser lays tables out to viewport width).
 UI_TABLE_INLINE_MAX_ROWS = int(os.environ.get("RAG_UI_TABLE_ROWS", "12"))
 UI_TABLE_INLINE_MAX_COLS = int(os.environ.get("RAG_UI_TABLE_COLS", "6"))
+MAX_ANALYSIS_TABLES_REASONER = int(os.environ.get("RAG_MAX_TABLES", "6"))
+PROMPT_MEANING_MAX_CHARS = 80
 
 # --------------------------------------------------------------------------- #
 # Feature flags (each phase independently switchable; 1/0 via env)            #

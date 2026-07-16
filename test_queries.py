@@ -1,109 +1,220 @@
-"""Automated test script for JarvisMan RAG system."""
-import sys
+#!/usr/bin/env python3
+"""Fast smoke-test for JarvisMan: runs questions through the SAME path the UI
+uses (Agent.handle) and reports the answer, the elapsed time, and -- crucially
+-- WHICH TABLE the answer was computed from.
+
+The old version called rag.answer(), which is the PDF/vector text path: it
+never touches the spreadsheets, so every tabular question came back "the
+indexed documents do not contain information relevant to that question" and
+was still scored a success. Table questions must go through Agent.handle.
+
+Usage:
+    python test_queries.py                  # run every question
+    python test_queries.py -k caixa         # only questions matching 'caixa'
+    python test_queries.py -n 4             # only question 4
+    python test_queries.py --list           # show questions, run nothing
+    python test_queries.py -f mine.jsonl    # a different question file
+
+Question file (JSONL, one object per line):
+    {"q": "Total funds per currency with CaixaBank as at 31.07.2023?",
+     "expect": ["EUR"],                 # substrings that must appear
+     "expect_table": "31-07-2023"}      # substring of the table it must use
+Both expect fields are optional; a question with neither is reported as
+INFO (answered, nothing asserted) rather than pass or fail.
+"""
+from __future__ import annotations
+
+import argparse
 import json
-from jarvisman import config as cfg
-from jarvisman.llm.ollama_client import OllamaClient
-from jarvisman.retrieval.rag import RAGPipeline
-from jarvisman.retrieval.vector_store import VectorStore
+import os
+import re
+import sys
+import time
+
+os.environ.setdefault("RAG_EXPLAIN", "1")   # capture traces for failures
+
+# NOTE: jarvisman imports are deliberately deferred into _boot() -- they pull in
+# faiss/torch and take seconds. --help and --list must stay instant.
+
+DEFAULT_QUESTIONS = "questions.jsonl"
+RESULTS_FILE = "test_results.json"
+
+# generated code addresses tables as dfs['<table name>'] (see sandbox._run_user_code)
+_DFS_RE = re.compile(r"""dfs\[\s*['"]([^'"]+)['"]\s*\]""")
 
 
-def test_queries():
-    """Run predefined queries and show results."""
-    
-    # Initialize components
-    print("🚀 Initializing JarvisMan RAG System...\n")
-    
-    ollama = OllamaClient(cfg.OLLAMA_HOST)
-    vector_store = VectorStore()
-    rag = RAGPipeline(
-        ollama=ollama,
-        vector_store=vector_store,
-        chat_model=cfg.DEFAULT_CHAT_MODEL,
-        embed_model=cfg.DEFAULT_EMBED_MODEL,
-    )
-    
-    # Load persisted index
-    try:
-        print("📚 Loading indexed data...\n")
-        rag.load_persisted()
-        print(f"✓ Index loaded\n")
-    except Exception as e:
-        print(f"❌ Error loading index: {e}")
-        print("Please build the index first using the UI.\n")
-        return
-    
-    # Define test queries
-    test_queries_list = [
-        "What is the total of all type of funds of company Lignum Technologies AG in Euro equivalent as at 31.07.2023?",
-        "What is the total of all type of funds in Euro (EUR) equivalent of all Croatian companies as at 31.07.2023?",
-        "What is the total of all type of funds with the RBI bank in Euro (EUR) equivalent as at 31.07.2023?",
-        "What is the total of all types of funds per Currency with the CaixaBank, S.A. bank as at 31.07.2023?",
-        "State and/or Sort Interest rates of Funds, while also outlining the currency held.3.1 e.g. Descending sort all interest rates for all Funds in Denmark and indicate their currency, company andbank held with as at 31.07.2023",
-    ]
-    
-    # Run queries
-    print("="*70)
-    print("TESTING QUERIES")
-    print("="*70 + "\n")
-    
-    results = []
-    
-    for i, query in enumerate(test_queries_list, 1):
-        print(f"📝 Query {i}/{len(test_queries_list)}: {query}")
-        print("-" * 70)
-        
+def load_questions(path: str) -> list:
+    """Read JSONL, skipping blanks and # comments. Reports the offending line
+    number on bad JSON rather than dying with a bare traceback."""
+    cases = []
+    with open(path, encoding="utf-8") as fh:
+        for n, line in enumerate(fh, 1):
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            try:
+                obj = json.loads(s)
+            except json.JSONDecodeError as exc:
+                sys.exit(f"{path}:{n}: bad JSON — {exc}")
+            if not obj.get("q"):
+                sys.exit(f"{path}:{n}: missing 'q'")
+            cases.append(obj)
+    if not cases:
+        sys.exit(f"{path}: no questions found")
+    return cases
+
+
+def tables_used(result: dict) -> list:
+    """Which tables the answer actually came from, read out of the generated
+    code. This is the signal that catches wrong-sheet answers -- a plausible
+    number from the wrong file looks perfect until you check this."""
+    code = result.get("code") or ""
+    seen, out = set(), []
+    for name in _DFS_RE.findall(code):
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def grade(case: dict, result: dict) -> tuple:
+    """-> (status, reason). status is PASS / FAIL / INFO."""
+    text = (result.get("text") or "")
+    table_html = result.get("table_html") or ""
+    haystack = (text + " " + table_html).lower()
+    used = tables_used(result)
+
+    problems = []
+
+    want_table = case.get("expect_table")
+    if want_table:
+        if not used:
+            problems.append(f"no table used (wanted ~{want_table})")
+        elif not any(want_table.lower() in u.lower() for u in used):
+            problems.append(f"used {used}, wanted ~{want_table}")
+
+    for token in (case.get("expect") or []):
+        if str(token).lower() not in haystack:
+            problems.append(f"missing {token!r}")
+
+    if not want_table and not case.get("expect"):
+        return "INFO", "answered; nothing asserted"
+    if problems:
+        return "FAIL", "; ".join(problems)
+    return "PASS", "ok"
+
+
+def _boot():
+    """Import the heavy stack only when we are really going to run questions."""
+    from jarvisman import config as cfg
+    from jarvisman.agent import Agent
+    from jarvisman.llm.ollama_client import OllamaClient
+    from jarvisman.retrieval.rag import RAGPipeline
+    from jarvisman.retrieval.vector_store import VectorStore
+    return cfg, Agent, OllamaClient, RAGPipeline, VectorStore
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("-f", "--file", default=DEFAULT_QUESTIONS)
+    ap.add_argument("-k", "--filter", help="only questions containing this text")
+    ap.add_argument("-n", "--number", type=int, help="only question N (1-based)")
+    ap.add_argument("--list", action="store_true", help="list questions and exit")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="print the full answer and generated code")
+    args = ap.parse_args()
+
+    cases = load_questions(args.file)
+    # narrow BEFORE listing, so `--list -k caixa` previews exactly what
+    # `-k caixa` would run
+    if args.number:
+        if not 1 <= args.number <= len(cases):
+            sys.exit(f"-n must be 1..{len(cases)}")
+        cases = [cases[args.number - 1]]
+    if args.filter:
+        cases = [c for c in cases if args.filter.lower() in c["q"].lower()]
+        if not cases:
+            sys.exit(f"no question matches {args.filter!r}")
+    if args.list:
+        for i, c in enumerate(cases, 1):
+            exp = []
+            if c.get("expect_table"):
+                exp.append(f"table~{c['expect_table']}")
+            if c.get("expect"):
+                exp.append(f"contains {c['expect']}")
+            print(f"{i:2}. {c['q']}")
+            if exp:
+                print(f"    expects: {'; '.join(exp)}")
+        return 0
+
+    cfg, Agent, OllamaClient, RAGPipeline, VectorStore = _boot()
+
+    print(f"Connecting to Ollama at {cfg.OLLAMA_HOST} ...")
+    oll = OllamaClient(cfg.OLLAMA_HOST)
+    if not oll.is_alive():
+        sys.exit(f"Ollama is not reachable at {cfg.OLLAMA_HOST}. "
+                 f"Start it with 'ollama serve'.")
+    store = VectorStore()
+    rag = RAGPipeline(oll, store, cfg.DEFAULT_CHAT_MODEL, cfg.DEFAULT_EMBED_MODEL)
+
+    print(f"Loading index from {cfg.INDEX_DIR} ...")
+    dfs = rag.load_persisted(cfg.INDEX_DIR) or {}
+    if not dfs:
+        sys.exit("No tables in the index. Build it in the UI first "
+                 "(Add files -> Build / Update Index).")
+    agent = Agent(oll, rag, cfg.DEFAULT_CHAT_MODEL)
+    agent.dataframes = dfs
+    print(f"{len(dfs)} table(s) loaded. Running {len(cases)} question(s) "
+          f"on {cfg.DEFAULT_CHAT_MODEL}.\n")
+
+    results, tally = [], {"PASS": 0, "FAIL": 0, "INFO": 0, "ERROR": 0}
+    t_all = time.monotonic()
+
+    for i, case in enumerate(cases, 1):
+        q = case["q"]
+        print(f"[{i:2}/{len(cases)}] {q[:66]}{'...' if len(q) > 66 else ''}")
+        t0 = time.monotonic()
         try:
-            # Get answer from RAG
-            answer, sources = rag.answer(query, k=5)
-            
-            # Store result
-            result = {
-                "query": query,
-                "answer": answer,
-                "sources": sources,
-                "status": "✓ Success"
-            }
-            results.append(result)
-            
-            # Print answer
-            print(f"\n💬 Answer:\n{answer}\n")
-            
-            # Print sources
-            if sources:
-                print(f"📋 Sources ({len(sources)}):")
-                for src in sources:
-                    print(f"  - {src['source']} {src['location']} (score: {src['score']})")
-            
-        except Exception as e:
-            print(f"\n❌ Error: {e}\n")
-            result = {
-                "query": query,
-                "answer": None,
-                "sources": [],
-                "status": f"❌ Error: {str(e)}"
-            }
-            results.append(result)
-        
-        print("\n" + "="*70 + "\n")
-    
-    # Summary
-    print("\n" + "="*70)
-    print("TEST SUMMARY")
-    print("="*70)
-    
-    successful = sum(1 for r in results if r["status"] == "✓ Success")
-    failed = len(results) - successful
-    
-    print(f"\n✓ Successful: {successful}/{len(results)}")
-    print(f"❌ Failed: {failed}/{len(results)}")
-    
-    # Save results to file
-    output_file = "test_results.json"
-    with open(output_file, 'w') as f:
-        json.dump(results, f, indent=2)
-    
-    print(f"\n📄 Results saved to: {output_file}\n")
+            res = agent.handle(q)
+        except Exception as exc:                      # keep going; report at end
+            secs = time.monotonic() - t0
+            tally["ERROR"] += 1
+            print(f"         ERROR  {secs:5.1f}s  {type(exc).__name__}: {exc}\n")
+            results.append({"q": q, "status": "ERROR", "error": str(exc),
+                            "seconds": round(secs, 2)})
+            continue
+        secs = time.monotonic() - t0
+        status, why = grade(case, res)
+        tally[status] += 1
+        used = tables_used(res)
+        print(f"         {status:5}  {secs:5.1f}s  "
+              f"table={used[0] if used else '-'}"
+              f"{f' (+{len(used) - 1})' if len(used) > 1 else ''}")
+        if status != "PASS":
+            print(f"                why: {why}")
+        if status == "FAIL" or args.verbose:
+            print(f"                got: {(res.get('text') or '')[:150]}")
+        if args.verbose and res.get("code"):
+            print("                --- code ---")
+            for ln in (res["code"] or "").splitlines():
+                print(f"                {ln}")
+        print()
+        results.append({"q": q, "status": status, "why": why,
+                        "seconds": round(secs, 2), "tables_used": used,
+                        "text": res.get("text"), "code": res.get("code"),
+                        "tool": res.get("tool")})
+
+    total = time.monotonic() - t_all
+    print("=" * 62)
+    print(f"PASS {tally['PASS']}   FAIL {tally['FAIL']}   "
+          f"ERROR {tally['ERROR']}   INFO {tally['INFO']}   "
+          f"[{total:.1f}s total, {total / max(len(cases), 1):.1f}s avg]")
+    with open(RESULTS_FILE, "w", encoding="utf-8") as fh:
+        json.dump(results, fh, indent=2, ensure_ascii=False)
+    print(f"Details written to {RESULTS_FILE}")
+    return 1 if (tally["FAIL"] or tally["ERROR"]) else 0
 
 
 if __name__ == "__main__":
-    test_queries()
+    sys.exit(main())

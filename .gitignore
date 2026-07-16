@@ -7,3 +7,15 @@ eval_run.txt
 __pycache__/
 test_funds.py
 test_funds.py
+
+# Index artifacts and source documents (company data -- never commit)
+data/
+table_cards.json
+table_profile.json
+profile.json
+plan_cache.json
+*.xlsx
+*.xls
+*.pdf
+venv/
+env/

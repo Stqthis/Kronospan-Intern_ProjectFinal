@@ -423,8 +423,11 @@ def render_for_prompt(model: SemanticModel, table_names: Optional[list[str]] = N
     relationships and pivot hints -- instead of hundreds of raw values."""
     max_vals = max_dim_values or cfg.PROMPT_DIM_MAX_VALUES
     names = table_names or model.table_names()
+    # Sibling sheets share a schema, so the block above is identical for each
+    # and the model has nothing to choose on. One line of what DIFFERS (period
+    # covered, which entities) is what tells them apart.
+    disc = table_discriminators(model) if len(names) > 1 else {}
     parts: list[str] = []
-    disc = table_discriminators(model)
     for n in names:
         t = model.tables.get(n)
         if t is None:
@@ -433,7 +436,7 @@ def render_for_prompt(model: SemanticModel, table_names: Optional[list[str]] = N
         if t.summary:
             head += f": {t.summary}"
         lines = [head]
-        if disc and len(names) > 1 and disc.get(n):        # <-- add
+        if disc.get(n):
             lines.append(f"  Distinguishes from sibling sheets: {disc[n]}")
         for c in t.columns:
             if c.role == "empty":
@@ -519,11 +522,14 @@ def render_for_prompt(model: SemanticModel, table_names: Optional[list[str]] = N
                       f"{r.parent_table}.'{r.parent_column}' (coverage {r.coverage:.0%})")
         parts.append("\n".join(rl))
     return "\n\n".join(parts) if parts else "none"
+
+
 def table_discriminators(model, max_dims: int = 2, max_vals: int = 6) -> dict:
     """One short line per table capturing ONLY what differs between sibling
-    sheets: row count, the span of each date column, and the distinct values
-    of the lowest-cardinality dimensions. Built from stats already in the
-    model -- no data rescan, no LLM."""
+    sheets: row count, the span of each date column, and the distinct values of
+    the lowest-cardinality dimensions. Built from stats already in the model --
+    no data rescan, no LLM. Same-schema sheets score identically in the table
+    ranker, so this is what tells them apart in the prompt."""
     out = {}
     for name in model.table_names():
         t = model.tables.get(name)
@@ -537,7 +543,7 @@ def table_discriminators(model, max_dims: int = 2, max_vals: int = 6) -> dict:
                 if c.role == "dimension" and c.top_values and c.distinct <= 40]
         dims.sort(key=lambda c: c.distinct)
         for c in dims[:max_dims]:
-            vals = ", ".join(v for v, _ in c.top_values[:max_vals])
+            vals = ", ".join(str(v) for v, _ in c.top_values[:max_vals])
             more = c.distinct - min(len(c.top_values), max_vals)
             bits.append(f"{c.name}=[{vals}{f' +{more}' if more > 0 else ''}]")
         out[name] = "; ".join(bits)
@@ -546,13 +552,18 @@ def table_discriminators(model, max_dims: int = 2, max_vals: int = 6) -> dict:
 
 def content_route(question, model, max_n: int = 3) -> list:
     """Deterministic pre-filter: narrow to the sheet(s) whose DATA matches a
-    period, snapshot date, or entity named in the question. Returns ordered
-    table names, or [] when the question carries no distinguishing signal."""
+    snapshot date, period or entity named in the question. Returns ordered
+    table names, or [] when the question carries no distinguishing signal.
+
+    Exists because the capability ranker scores same-schema sheets identically
+    (a dead tie), leaving the planner to break the tie on prompt position --
+    which always picks the same file. What actually separates monthly snapshots
+    is the DATA they hold, not their columns."""
     import re
     from jarvisman.semantics.table_cards import filename_asof
     ql = (question or "").lower()
 
-    # 'as at <date>' on a date-named snapshot: ONLY that file is valid --
+    # 'as at <date>' against a date-named snapshot: ONLY that file is valid --
     # a different snapshot does not cover that date.
     m = re.search(r"\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})\b", ql)
     if m:
@@ -577,7 +588,8 @@ def content_route(question, model, max_n: int = 3) -> list:
                 s += 3.0 * sum(1 for y in q_years if y in span)
                 if c.role == "date":
                     s += 3.0 * sum(1 for mn in q_months
-                                   if f"-{mn:02d}-" in c.vmin or f"-{mn:02d}-" in c.vmax)
+                                   if f"-{mn:02d}-" in str(c.vmin)
+                                   or f"-{mn:02d}-" in str(c.vmax))
             if c.role == "dimension" and c.top_values:
                 for v, _ in c.top_values:
                     if v and len(str(v)) >= 3 and str(v).lower() in ql:

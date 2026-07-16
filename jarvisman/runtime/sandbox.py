@@ -174,20 +174,28 @@ def _format_result(obj: Any, pd) -> tuple[Optional[str], Optional[str]]:
         return None, None
     try:
         if isinstance(obj, pd.DataFrame):
-            capped = obj.head(cfg.QUERY_MAX_RESULT_ROWS)
-            extra = len(obj) - len(capped)
+            # Two consumers, two caps: the TEXT is read by the LLM (synthesis)
+            # and the eval and must stay small; the HTML goes to the UI, which
+            # scrolls, so it may carry far more.
+            t_cap = obj.head(cfg.QUERY_MAX_RESULT_ROWS)
+            h_cap = obj.head(getattr(cfg, "QUERY_MAX_TABLE_ROWS", 2000))
+            extra = len(obj) - len(t_cap)
             note = "" if extra <= 0 else f"\n... ({extra} more rows)"
-            f = None if plain else _fmts(capped)
-            return (capped.to_string(formatters=f) + note,
-                    capped.to_html(border=1, index=True, formatters=f))
+            ft = None if plain else _fmts(t_cap)
+            fh = None if plain else _fmts(h_cap)
+            return (t_cap.to_string(formatters=ft) + note,
+                    h_cap.to_html(border=1, index=True, formatters=fh))
         if isinstance(obj, pd.Series):
-            capped = obj.head(cfg.QUERY_MAX_RESULT_ROWS)
-            extra = len(obj) - len(capped)
+            t_cap = obj.head(cfg.QUERY_MAX_RESULT_ROWS)
+            h_cap = obj.head(getattr(cfg, "QUERY_MAX_TABLE_ROWS", 2000))
+            extra = len(obj) - len(t_cap)
             note = "" if extra <= 0 else f"\n... ({extra} more rows)"
-            shown = capped if plain or getattr(capped.dtype, "kind", "O") \
-                not in "iuf" else capped.map(numfmt.fmt)
+            shown = t_cap if plain or getattr(t_cap.dtype, "kind", "O") \
+                not in "iuf" else t_cap.map(numfmt.fmt)
+            shown_h = h_cap if plain or getattr(h_cap.dtype, "kind", "O") \
+                not in "iuf" else h_cap.map(numfmt.fmt)
             return (shown.to_string() + note,
-                    shown.to_frame().to_html(border=1, index=True))
+                    shown_h.to_frame().to_html(border=1, index=True))
         if not plain and isinstance(obj, (int, float)) \
                 and not isinstance(obj, bool):
             return numfmt.fmt(obj), None

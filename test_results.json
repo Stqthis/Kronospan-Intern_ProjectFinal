@@ -1,32 +1,32 @@
 [
   {
     "query": "What is the total of all type of funds of company Lignum Technologies AG in Euro equivalent as at 31.07.2023?",
-    "answer": "The indexed documents do not contain information relevant to that question.",
+    "answer": null,
     "sources": [],
-    "status": "\u2713 Success"
+    "status": "\u274c Error: 'tuple' object has no attribute 'get'"
   },
   {
     "query": "What is the total of all type of funds in Euro (EUR) equivalent of all Croatian companies as at 31.07.2023?",
-    "answer": "The indexed documents do not contain information relevant to that question.",
+    "answer": null,
     "sources": [],
-    "status": "\u2713 Success"
+    "status": "\u274c Error: 'tuple' object has no attribute 'get'"
   },
   {
     "query": "What is the total of all type of funds with the RBI bank in Euro (EUR) equivalent as at 31.07.2023?",
-    "answer": "The indexed documents do not contain information relevant to that question.",
+    "answer": null,
     "sources": [],
-    "status": "\u2713 Success"
+    "status": "\u274c Error: 'tuple' object has no attribute 'get'"
   },
   {
     "query": "What is the total of all types of funds per Currency with the CaixaBank, S.A. bank as at 31.07.2023?",
-    "answer": "The indexed documents do not contain information relevant to that question.",
+    "answer": null,
     "sources": [],
-    "status": "\u2713 Success"
+    "status": "\u274c Error: 'tuple' object has no attribute 'get'"
   },
   {
     "query": "State and/or Sort Interest rates of Funds, while also outlining the currency held.3.1 e.g. Descending sort all interest rates for all Funds in Denmark and indicate their currency, company andbank held with as at 31.07.2023",
-    "answer": "The indexed documents do not contain information relevant to that question.",
+    "answer": null,
     "sources": [],
-    "status": "\u2713 Success"
+    "status": "\u274c Error: 'tuple' object has no attribute 'get'"
   }
 ]
