@@ -461,17 +461,29 @@ class TableReasoner:
                                notes=plres.notes)
 
     def _planner_tables(self, evidence: Evidence) -> dict:
-        """Tables exposed to the planner. For small workbooks expose ALL of
-        them in stable insertion order: the schema block is then byte-identical
-        across questions, so llama.cpp prompt-prefix caching skips re-evaluating
-        it (a large CPU saving). Only large workbooks fall back to the
-        per-question evidence-ranked subset."""
-        if len(self.dataframes) <= 6:
+        """Narrow to the sheet(s) the question is actually about, best-first,
+        so the planner never has to break a tie between identical schemas."""
+        all_names = list(self.dataframes)
+        if len(all_names) <= 1:
             return dict(self.dataframes)
-        names = evidence.ranked_tables(cfg.MAX_ANALYSIS_TABLES_REASONER)
-        return {n: self.dataframes[n] for n in names if n in self.dataframes} \
-            or dict(self.dataframes)
 
+        from jarvisman.semantics.semantic_model import content_route
+        cap = cfg.MAX_ANALYSIS_TABLES_REASONER
+
+        routed = content_route(evidence.question, self.model, max_n=cap)
+        value_tables = [n for n in dict.fromkeys(
+            h.table for h in evidence.value_hits) if n in self.dataframes]
+        lead = list(dict.fromkeys(
+            n for n in (routed + value_tables) if n in self.dataframes))
+
+        if lead:                                   # real content signal -> trust it
+            return {n: self.dataframes[n] for n in lead[:cap]}
+
+        ranked = evidence.ranked_tables(cap)       # no signal: fall back
+        chosen = ranked or all_names[:cap]
+        return {n: self.dataframes[n] for n in chosen}
+    
+    
     @staticmethod
     def _first_alias(plan: QueryPlan) -> str:
         from jarvisman.planning.query_plan import PlanValidator
@@ -725,7 +737,7 @@ class TableReasoner:
             out = self.ollama.chat(
                 cfg.model_for("synthesize", self.chat_model),
                 [{"role": "user", "content": prompt}],
-                options={"temperature": 0.1,
+                options={"temperature": 0.0,
                          "num_predict": getattr(cfg, "SYNTH_NUM_PREDICT", 220)},
             ).strip()
         except Exception:

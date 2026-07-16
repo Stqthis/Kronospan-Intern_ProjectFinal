@@ -82,6 +82,28 @@ class RAGPipeline:
     table_cards: dict = {}
     index_version: str = "0"
 
+    @staticmethod
+    def _content_version(dataframes: dict, chunk_count: int = 0) -> str:
+        """A stable signature of WHAT is indexed: table keys, columns and
+        row counts, plus the text-chunk count. Keys the persisted plan
+        cache, so a plan cached for one dataset can never replay against a
+        different one (the old per-session counter collided: every fresh
+        session's first index was version '1'), and cached plans for the
+        SAME dataset now survive a restart as intended."""
+        import hashlib
+        h = hashlib.sha1()
+        for key in sorted(dataframes or {}):
+            df = dataframes[key]
+            try:
+                h.update(str(key).encode("utf-8", "ignore"))
+                h.update(str(df.shape).encode())
+                h.update("|".join(str(c) for c in df.columns)
+                         .encode("utf-8", "ignore"))
+            except Exception:
+                continue
+        h.update(str(int(chunk_count)).encode())
+        return h.hexdigest()[:12]
+
     def __init__(
         self,
         ollama: OllamaClient,
@@ -188,21 +210,52 @@ class RAGPipeline:
         }
         self._query_vec_cache.clear()
 
+        # ------------------------------------------------------------------
+        # INCREMENTAL UPDATE semantics ("Build / Update Index" means UPDATE):
+        # previously indexed files are KEPT; a re-indexed file replaces its own
+        # old chunks/tables. This is what makes the index scale to hundreds of
+        # files added over many sessions -- indexing a new batch no longer
+        # wipes everything indexed before. "Clear" is the explicit wipe.
+        # ------------------------------------------------------------------
+        new_sources = {os.path.basename(p) for p in paths}
+
         if chunks:
             embed_texts = [chunk_embed_text(ch) for ch in chunks]
             vectors = self._embed_many(embed_texts, report)
             report("Building vector index ...")
             embeddings = np.array(vectors, dtype="float32")
-            self.vector_store.build(embeddings, chunks, self.embed_model)
-            self.bm25.build(chunks)
+            if self.vector_store.count and \
+                    self.vector_store.embed_model == self.embed_model:
+                self.vector_store.remove_sources(new_sources)
+                self.vector_store.append(embeddings, chunks, self.embed_model)
+            else:
+                self.vector_store.build(embeddings, chunks, self.embed_model)
+            self.bm25.build(self.vector_store.chunks)
             try:
                 self.vector_store.save(cfg.INDEX_DIR)
             except Exception:
                 pass  # persistence is best-effort
+        elif self.vector_store.count:
+            # Excel-only batch: previously indexed PDFs stay searchable.
+            self.vector_store.remove_sources(new_sources)
+            self.bm25.build(self.vector_store.chunks)
         else:
-            # Pure-table workload: no prose to retrieve, so no index needed.
             self.vector_store.reset()
             self.bm25 = BM25Index(cfg.BM25_K1, cfg.BM25_B)
+
+        # Merge with previously persisted tables (dropping old versions of
+        # any file being re-indexed) so the semantic model, cards and value
+        # index are built over the FULL collection.
+        try:
+            prior_tables = load_tables(cfg.INDEX_DIR) or {}
+        except Exception:
+            prior_tables = {}
+        prior_tables = {k: v for k, v in prior_tables.items()
+                        if str(k).split(":", 1)[0] not in new_sources}
+        try:
+            prior_profile = load_profile(cfg.INDEX_DIR) or {}
+        except Exception:
+            prior_profile = {}
 
         if dataframes:
             # Check if we should skip profiling for speed
@@ -219,12 +272,19 @@ class RAGPipeline:
                 # configured (llama3:70b writes better descriptions than the
                 # code model). Falls back to the chat model on single-model setups.
                 _enrich_model = cfg.model_for("understand", self.chat_model)
-                _prior_profile = load_profile(cfg.INDEX_DIR)
                 dataframes, self.table_profile = profile_and_apply(
                     self.ollama, _enrich_model, dataframes, report,
-                    existing=_prior_profile,
+                    existing=prior_profile,
                 )
-            
+            # fold the new batch into the existing collection
+            merged = dict(prior_tables)
+            merged.update(dataframes)
+            dataframes = merged
+            merged_profile = {k: v for k, v in prior_profile.items()
+                              if k in dataframes}
+            merged_profile.update(self.table_profile or {})
+            self.table_profile = merged_profile
+
             report("Saving tables ...")
             save_tables(cfg.INDEX_DIR, dataframes)
             save_profile(cfg.INDEX_DIR, self.table_profile)
@@ -280,12 +340,26 @@ class RAGPipeline:
                 except Exception:
                     self.table_cards = {}
             
-            self.index_version = str(int(self.index_version) + 1) \
-                if str(getattr(self, "index_version", "0")).isdigit() else "1"
+            self.index_version = self._content_version(
+                dataframes,
+                len(getattr(self.vector_store, "chunks", []) or []))
+            stats["tables"] = len(dataframes)
+        elif prior_tables:
+            # PDF-only batch on top of an existing table collection: keep it.
+            dataframes = prior_tables
+            self.table_profile = prior_profile
+            report("Building semantic model ...")
+            self.semantic_model = build_semantic_model(
+                dataframes, meanings=self.table_profile)
+            self.index_version = self._content_version(
+                dataframes,
+                len(getattr(self.vector_store, "chunks", []) or []))
         else:
             self.table_profile = {}
             self.semantic_model = None
             self.relationships = {}
+            self.index_version = self._content_version(
+                {}, len(getattr(self.vector_store, "chunks", []) or []))
 
         return stats, dataframes
     
@@ -319,6 +393,8 @@ class RAGPipeline:
             self.bm25 = BM25Index(cfg.BM25_K1, cfg.BM25_B)
             if not tables:
                 raise  # nothing at all was saved
+        self.index_version = self._content_version(
+            tables or {}, len(getattr(self.vector_store, "chunks", []) or []))
         return tables
 
     # ------------------------------------------------------------------ #
@@ -412,7 +488,7 @@ class RAGPipeline:
             self.chat_model,
             messages,
             options={
-                "temperature": 0.2,
+                "temperature": 0.0,
                 "num_predict": 300,
                 "top_k": 40,
                 "top_p": 0.9,

@@ -424,6 +424,7 @@ def render_for_prompt(model: SemanticModel, table_names: Optional[list[str]] = N
     max_vals = max_dim_values or cfg.PROMPT_DIM_MAX_VALUES
     names = table_names or model.table_names()
     parts: list[str] = []
+    disc = table_discriminators(model)
     for n in names:
         t = model.tables.get(n)
         if t is None:
@@ -432,6 +433,8 @@ def render_for_prompt(model: SemanticModel, table_names: Optional[list[str]] = N
         if t.summary:
             head += f": {t.summary}"
         lines = [head]
+        if disc and len(names) > 1 and disc.get(n):        # <-- add
+            lines.append(f"  Distinguishes from sibling sheets: {disc[n]}")
         for c in t.columns:
             if c.role == "empty":
                 continue
@@ -516,3 +519,70 @@ def render_for_prompt(model: SemanticModel, table_names: Optional[list[str]] = N
                       f"{r.parent_table}.'{r.parent_column}' (coverage {r.coverage:.0%})")
         parts.append("\n".join(rl))
     return "\n\n".join(parts) if parts else "none"
+def table_discriminators(model, max_dims: int = 2, max_vals: int = 6) -> dict:
+    """One short line per table capturing ONLY what differs between sibling
+    sheets: row count, the span of each date column, and the distinct values
+    of the lowest-cardinality dimensions. Built from stats already in the
+    model -- no data rescan, no LLM."""
+    out = {}
+    for name in model.table_names():
+        t = model.tables.get(name)
+        if t is None:
+            continue
+        bits = [f"{t.rows} rows"]
+        for c in t.columns:
+            if c.role in ("date", "year") and c.vmin is not None:
+                bits.append(f"{c.name} {c.vmin}..{c.vmax}")
+        dims = [c for c in t.columns
+                if c.role == "dimension" and c.top_values and c.distinct <= 40]
+        dims.sort(key=lambda c: c.distinct)
+        for c in dims[:max_dims]:
+            vals = ", ".join(v for v, _ in c.top_values[:max_vals])
+            more = c.distinct - min(len(c.top_values), max_vals)
+            bits.append(f"{c.name}=[{vals}{f' +{more}' if more > 0 else ''}]")
+        out[name] = "; ".join(bits)
+    return out
+
+
+def content_route(question, model, max_n: int = 3) -> list:
+    """Deterministic pre-filter: narrow to the sheet(s) whose DATA matches a
+    period, snapshot date, or entity named in the question. Returns ordered
+    table names, or [] when the question carries no distinguishing signal."""
+    import re
+    from jarvisman.semantics.table_cards import filename_asof
+    ql = (question or "").lower()
+
+    # 'as at <date>' on a date-named snapshot: ONLY that file is valid --
+    # a different snapshot does not cover that date.
+    m = re.search(r"\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})\b", ql)
+    if m:
+        q_asat = f"{int(m.group(1)):02d}.{int(m.group(2)):02d}.{m.group(3)}"
+        exact = [n for n in model.table_names() if filename_asof(n) == q_asat]
+        if exact:
+            return exact[:max_n]
+
+    q_years = set(re.findall(r"\b(19\d{2}|20\d{2})\b", ql))
+    months = ("jan", "feb", "mar", "apr", "may", "jun",
+              "jul", "aug", "sep", "oct", "nov", "dec")
+    q_months = {i + 1 for i, mo in enumerate(months) if mo in ql}
+    scored = []
+    for name in model.table_names():
+        t = model.tables.get(name)
+        if t is None:
+            continue
+        s = 0.0
+        for c in t.columns:
+            if c.role in ("date", "year") and c.vmin is not None:
+                span = f"{c.vmin} {c.vmax}".lower()
+                s += 3.0 * sum(1 for y in q_years if y in span)
+                if c.role == "date":
+                    s += 3.0 * sum(1 for mn in q_months
+                                   if f"-{mn:02d}-" in c.vmin or f"-{mn:02d}-" in c.vmax)
+            if c.role == "dimension" and c.top_values:
+                for v, _ in c.top_values:
+                    if v and len(str(v)) >= 3 and str(v).lower() in ql:
+                        s += 4.0
+        if s:
+            scored.append((s, name))
+    scored.sort(key=lambda x: -x[0])
+    return [n for _, n in scored[:max_n]]

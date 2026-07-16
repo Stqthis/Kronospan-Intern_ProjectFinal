@@ -179,7 +179,7 @@ def generate_card(ollama, chat_model: str, table_name: str,
             chat_model,
             [{"role": "system", "content": _CARD_PROMPT},
              {"role": "user", "content": f"Table:\n{schema_block}\n\nJSON:"}],
-            options={"temperature": 0.0},
+            options={"temperature": 0.0, "num_predict": 768},
             format="json",
         )
         return extract_json(out)
@@ -187,32 +187,91 @@ def generate_card(ollama, chat_model: str, table_name: str,
         return None
 
 
+def _localize_card(card: dict, table_name: str) -> dict:
+    """Strip a donor sheet's file-specific facts from a shared card so it can
+    honestly describe a sibling. The card prompt tells the model to read
+    ``as_of`` off the FILE NAME, so a reused card would otherwise assert the
+    donor's snapshot date -- drop it (the caller re-derives it from this
+    table's own name) and retarget any date written into the prose."""
+    import copy
+    import re as _re
+    out = copy.deepcopy(card) if isinstance(card, dict) else {}
+    out.pop("as_of", None)
+    mine = filename_asof(table_name)
+    date_re = _re.compile(r"\b\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4}\b")
+
+    def _fix(s):
+        if not isinstance(s, str) or not date_re.search(s):
+            return s
+        if mine:
+            return date_re.sub(mine, s)
+        # no date of our own -> drop the clause rather than assert a wrong one
+        return _re.sub(r"\s*\(?\bas at\b[^.,;)]*\)?", "", s, flags=_re.I).strip()
+
+    if out.get("purpose"):
+        out["purpose"] = _fix(out["purpose"])
+    if out.get("caveats"):
+        out["caveats"] = [_fix(c) for c in out["caveats"]]
+    return out
+
+
 def build_cards(ollama, chat_model: str, model, dataframes: dict,
                 existing: Optional[dict] = None, progress=None) -> dict:
     """Returns the full persistable structure {table: {schema_hash, card,
     notes}}, regenerating ONLY tables whose schema hash changed (hand edits
-    with an unchanged hash are preserved verbatim)."""
+    with an unchanged hash are preserved verbatim).
+
+    Sibling sheets -- same columns, same dtypes, hence the same schema_hash --
+    share ONE LLM call between them: N monthly snapshots of one report cost a
+    single card instead of N near-identical ones. Each sibling is still
+    sanitized against its OWN data and gets its OWN as_of from its file name,
+    so sharing never smuggles the donor's facts across."""
     from jarvisman.semantics.semantic_model import render_for_prompt
     store = dict(existing or {})
     if not cfg.TABLE_CARDS:
         return store
+
+    todo: dict = {}                    # schema_hash -> [table names needing one]
     for name, df in dataframes.items():
         h = schema_hash(df)
         prev = store.get(name)
         if prev and prev.get("schema_hash") == h:
-            continue
-        if progress:
-            progress(f"Understanding table {name} ...")
-        block = render_for_prompt(model, [name])
-        raw = generate_card(ollama, chat_model, name, block)
-        card, notes = sanitize_card(raw or {}, model.tables.get(name), df)
-        fdate = filename_asof(name)
-        if fdate and not card.get("as_of"):
-            card["as_of"] = fdate
-            if not card.get("table_kind"):
-                card["table_kind"] = "snapshot"
-            notes.append(f"as_of {fdate} taken from the file name")
-        store[name] = {"schema_hash": h, "card": card, "notes": notes}
+            continue                   # unchanged (or hand-edited): keep as is
+        todo.setdefault(h, []).append(name)
+
+    # A persisted card of the SAME schema is a free donor: reuse it rather
+    # than paying for a new call (e.g. adding August to an indexed year).
+    cache: dict = {}                   # schema_hash -> (raw_card, donor_name)
+    for name, entry in store.items():
+        h = entry.get("schema_hash")
+        if h in todo and h not in cache and entry.get("card"):
+            cache[h] = (entry["card"], name)
+
+    for h, names in todo.items():
+        for name in names:
+            df = dataframes[name]
+            if h in cache:
+                raw, donor = cache[h]
+            else:
+                if progress:
+                    progress(f"Understanding table {name} ...")
+                block = render_for_prompt(model, [name])
+                raw, donor = (generate_card(ollama, chat_model, name, block)
+                              or {}), name
+                cache[h] = (raw, donor)
+            shared = donor != name
+            src = _localize_card(raw, name) if shared else raw
+            card, notes = sanitize_card(src, model.tables.get(name), df)
+            fdate = filename_asof(name)
+            if fdate and not card.get("as_of"):
+                card["as_of"] = fdate
+                if not card.get("table_kind"):
+                    card["table_kind"] = "snapshot"
+                notes.append(f"as_of {fdate} taken from the file name")
+            if shared:
+                notes.append(f"card reused from '{donor}' (identical schema; "
+                             "0 extra LLM calls)")
+            store[name] = {"schema_hash": h, "card": card, "notes": notes}
     return store
 
 

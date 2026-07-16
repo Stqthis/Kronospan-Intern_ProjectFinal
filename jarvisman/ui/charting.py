@@ -14,10 +14,10 @@ CHART_TYPES = ("bar", "barh", "line", "area", "pie", "scatter")
 # Warm fallback aligned with the app's default (light) theme; callers such as
 # the chart window pass their own active theme, which takes precedence.
 DEFAULT_THEME = {
-    "bg": "#faf9f5", "panel": "#ffffff", "text": "#2b2a27",
-    "muted": "#6f6b60", "grid": "#e3e0d6", "accent": "#c65d3b",
-    "cycle": ["#c65d3b", "#3d8b52", "#b7791f", "#3a6ea5", "#8a5cae",
-              "#2f9488", "#c1567f", "#a8863f", "#5a9e64", "#d4834f"],
+    "bg": "#f5f8fc", "panel": "#ffffff", "text": "#16273c",
+    "muted": "#5b6b81", "grid": "#d5e0ee", "accent": "#0f5aa8",
+    "cycle": ["#0f5aa8", "#2e7d4f", "#b7791f", "#c0563f", "#7a5cae",
+              "#2f8f9e", "#c1567f", "#5b6b81", "#3f7fd1", "#8f7a3f"],
 }
 
 
