@@ -1,0 +1,46 @@
+# Full local stack: Ollama (models) + Jarvisman (assistant).
+#
+#   docker compose up -d ollama
+#   docker compose run --rm app index /files            # index mounted files
+#   docker compose run --rm app ask "your question"
+#   docker compose run --rm app chat                    # interactive
+#
+# Put your PDFs/Excels under ./files (or change the bind mount below).
+# The index persists in the named volume `jarvis_index`.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # Uncomment for NVIDIA GPUs:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  app:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      RAG_DATA_DIR: /data
+      # RAG_CHAT_MODEL: qwen2.5-coder:14b   # override for smaller machines
+    volumes:
+      - jarvis_index:/data
+      - ./files:/files:ro
+
+volumes:
+  ollama_models:
+  jarvis_index:
