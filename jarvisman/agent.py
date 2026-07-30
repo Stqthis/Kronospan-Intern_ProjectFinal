@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import difflib
@@ -14,6 +12,7 @@ from jarvisman.llm.llm_json import extract_json as _extract_json_shared
 from jarvisman.llm.ollama_client import OllamaClient
 from jarvisman.retrieval.rag import RAGPipeline
 from jarvisman.planning.reasoner import TableReasoner
+from jarvisman.planning import code_resolver
 from jarvisman.retrieval.retrieval import tokenize
 from jarvisman.runtime.sandbox import run_query, run_sandboxed
 from jarvisman.semantics.semantic_model import build_semantic_model, load_semantic_model
@@ -198,7 +197,7 @@ class Agent:
         if not dfs:
             self.semantic_model = None
             self.value_index = None
-            self.reasoner.attach({}, None, None, relationship_context="")
+            self.reasoner.attach({}, None, None)
             return
         # Prefer the model built at index time (it carries the LLM meanings);
         # fall back to the persisted copy, then to a fresh statistical build.
@@ -221,12 +220,8 @@ class Agent:
         except Exception:
             cards = {}
         iv = str(getattr(self.rag, "index_version", len(dfs)))
-        try:
-            rel_ctx = self.rag._build_relationship_context()
-        except Exception:
-            rel_ctx = ""
         self.reasoner.attach(dfs, sm, self.value_index, cards=cards,
-                             index_version=iv, relationship_context=rel_ctx)
+                             index_version=iv)
 
     # ------------------------------------------------------------------ #
     # Schemas                                                            #
@@ -353,7 +348,7 @@ class Agent:
                 try:
                     obj_cols = [c for c in df.columns if df[c].dtype.kind not in "iufcMb"]
                     for c in obj_cols[:20]:
-                        s = df[c].astype(str)
+                        s = df[c].astype(str).head(5000)
                         if s.str.contains(re.escape(entity), case=False, na=False).any():
                             score += 1.5   # capped tie-breaker, not dominant
                             break
@@ -1123,6 +1118,20 @@ class Agent:
                       forced_bind: Optional[dict] = None, bind_term: str = "",
                       directive: str = "",
                       constraint: Optional[dict] = None) -> dict:
+        # Company CODE -> NAME resolution, done ONCE here so BOTH the plan tier
+        # and the codegen fallback see the rewritten query. (A rewrite inside
+        # the reasoner would not reach codegen, which reads this `query`.)
+        try:
+            new_q, _rnotes, _clarify = code_resolver.resolve_in_question(
+                query, self.dataframes)
+            if _clarify:
+                return self._text_result(_clarify, streamed=False)
+            if new_q != query:
+                if progress_callback:
+                    progress_callback("Resolved company code to name ...")
+                query = new_q
+        except Exception:
+            pass
         # Tier 1: structured plan over the semantic model -- grounded against
         # the actual cell values, validated and compiled BEFORE execution.
         evidence_block = ""

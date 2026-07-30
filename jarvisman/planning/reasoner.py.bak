@@ -34,6 +34,7 @@ from jarvisman.planning.query_plan import QueryPlan, compile_plan
 from jarvisman.runtime.sandbox import run_query, run_sandboxed, validate_code
 from jarvisman.semantics.semantic_model import SemanticModel
 from jarvisman.semantics.value_index import ValueIndex, norm_text
+from jarvisman.planning import code_resolver
 
 _PROV_RE = re.compile(r"^PROV (.+?): (\d+) rows?", re.MULTILINE)
 _NUM_RE = re.compile(r"-?\d[\d,]*\.?\d*")
@@ -79,12 +80,36 @@ def sibling_choice(question, model, dataframes, max_opts: int = 12):
     group = max(sig.values(), key=len)
     if len(group) < 2:
         return None, None                # schemas differ -> not this problem
-    opts = []
+    # Labels must be UNIQUE: ten sheets of one workbook all dated
+    # 30.06.2024 used to render as ten identical chips. When a date is
+    # shared, include the sheet/file name; drop any residual duplicates.
+    date_count: dict = {}
+    for n in group[:max_opts]:
+        d = filename_asof(n) or ""
+        date_count[d] = date_count.get(d, 0) + 1
+    opts, seen = [], set()
     for n in group[:max_opts]:
         d = filename_asof(n)
-        opts.append({"label": d or n.split(":")[0], "table": n,
-                     "suffix": f" as at {d}" if d else f" in file {n.split(':')[0]}"})
+        stem = n.split(":")[0]
+        for ext in (".xlsx", ".xls", ".xlsm"):
+            if stem.lower().endswith(ext):
+                stem = stem[: -len(ext)]
+        sheet = n.split(":", 1)[1] if ":" in n else ""
+        if d and date_count.get(d, 0) == 1:
+            label = d
+        elif d:
+            label = f"{(sheet or stem)[:34]} ({d})"
+        else:
+            label = (f"{stem}:{sheet}" if sheet else stem)[:44]
+        if label in seen:
+            continue
+        seen.add(label)
+        opts.append({"label": label, "table": n,
+                     "suffix": f" as at {d}" if d else f" in file {stem}"})
     opts.sort(key=lambda o: o["label"])
+    opts = opts[:8]
+    if len(opts) < 2:
+        return None, None            # nothing distinguishable to ask about
     return ("Those sheets all hold the same kind of data. "
             "Which one do you mean?", opts)
 
@@ -125,7 +150,8 @@ class TableReasoner:
     # ------------------------------------------------------------------ #
     def attach(self, dataframes: dict, model: Optional[SemanticModel],
                vindex: Optional[ValueIndex], cards: Optional[dict] = None,
-               index_version: Optional[str] = None) -> None:
+               index_version: Optional[str] = None,
+               relationship_context: str = "") -> None:
         self.dataframes = dataframes or {}
         self.model = model
         self.vindex = vindex
@@ -144,6 +170,7 @@ class TableReasoner:
         # share cards with the planner for schema rendering + compile context
         self.planner._cards = self.cards
         self.planner._coverage_anchors = []
+        self.planner._relationship_context = relationship_context or ""
 
     @property
     def ready(self) -> bool:
@@ -230,6 +257,51 @@ class TableReasoner:
         if not self.ready:
             return ReasonerOutcome(kind="fallback")
         trace: list = []
+        # ---- Code->name resolution (DEBUG: loud, never silent) -------------
+        try:
+            _cand = re.findall(r"[A-Za-z]{1,4}\d{1,5}[A-Za-z]?", question)
+            trace.append(f"[resolver] candidates={_cand} n_tables={len(self.dataframes)}")
+            for tok in _cand:
+                if not code_resolver.looks_like_code(tok):
+                    continue
+                resolved = code_resolver.resolve_code(tok, self.dataframes)
+                trace.append(f"[resolver] {tok} -> {resolved!r}")
+                if resolved:
+                    question = re.sub(re.escape(tok), resolved, question, count=1)
+                    trace.append(f"[resolver] rewrote -> {question}")
+        except Exception as _e:
+            trace.append(f"[resolver] ERROR: {_e!r}")
+        # data tables use, so the normal query path can answer it. -----------
+        for tok in re.findall(r"[A-Za-z]{1,4}\d{1,5}[A-Za-z]?", question):
+            if not code_resolver.looks_like_code(tok):
+                continue
+            resolved = code_resolver.resolve_code(tok, self.dataframes)
+            if not resolved:
+                continue
+            # find where the name is used and whether it matches exactly
+            exact_ok = False
+            for _, df in self.dataframes.items():
+                col = code_resolver.find_company_column(df)
+                if not col:
+                    continue
+                matched, is_exact, ambiguous = code_resolver.match_name(resolved, df, col)
+                if matched and is_exact:
+                    exact_ok = True
+                    break
+                if matched and ambiguous:
+                    return ReasonerOutcome(kind="clarify",
+                        clarification=f"Code {tok} maps to '{resolved}', but I found "
+                                      f"more than one close company name. Which did you mean?")
+                if matched and not is_exact:
+                    # fuzzy, single candidate -> confirm before trusting on money data
+                    return ReasonerOutcome(kind="clarify",
+                        clarification=f"I read code {tok} as company '{resolved}', "
+                                      f"matched to '{matched}'. Is that correct?")
+            # exact (or resolved with a usable name): rewrite the code -> name
+            question = re.sub(re.escape(tok), resolved, question, count=1)
+            if progress:
+                progress(f"Resolved code {tok} -> {resolved}")
+            trace.append(f"resolved company code {tok} to '{resolved}'")
 
         # ---- Phase A: deterministic follow-up (zero LLM calls) ----------
         fu_plan = None if directive else \
@@ -557,7 +629,9 @@ class TableReasoner:
         lead = list(dict.fromkeys(
             n for n in (routed + value_tables) if n in self.dataframes))
         if lead:
-            return {n: self.dataframes[n] for n in lead[:cap]}
+            chosen = self._ensure_column_coverage(
+                evidence.question, lead[:cap], cap)
+            return {n: self.dataframes[n] for n in chosen}
 
         # No signal -> keep the cacheable stable-order block for small workbooks
         if len(all_names) <= 6:
@@ -565,6 +639,37 @@ class TableReasoner:
         ranked = evidence.ranked_tables(cap)
         chosen = [n for n in ranked if n in self.dataframes] or all_names[:cap]
         return {n: self.dataframes[n] for n in chosen}
+
+    def _ensure_column_coverage(self, question: str, chosen: list,
+                                cap: int) -> list:
+        """Value/date routing can pick sheets that merely CONTAIN a
+        mentioned value while lacking the COLUMN the question needs
+        ('Italy' appears in WCR sheets, but only CY05 has Address — the
+        address question then dead-ends with 'column does not exist').
+        If the question names a real column that none of the chosen
+        tables carries, append the best table that has it."""
+        ql = (question or "").lower()
+        col_tables: dict = {}
+        for name, df in self.dataframes.items():
+            try:
+                for c in df.columns:
+                    cs = str(c).strip().lower()
+                    if len(cs) >= 4 and cs in ql:
+                        col_tables.setdefault(cs, []).append(name)
+            except Exception:
+                continue
+        out = list(chosen)
+        for cs, tables in col_tables.items():
+            if any(t in out for t in tables):
+                continue
+            try:
+                extra = max(tables,
+                            key=lambda t: self.dataframes[t].shape[0])
+            except Exception:
+                extra = tables[0]
+            if extra not in out:
+                out.append(extra)
+        return out[: cap + 2]
 
     @staticmethod
     def _first_alias(plan: QueryPlan) -> str:
