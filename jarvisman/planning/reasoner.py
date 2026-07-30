@@ -149,7 +149,8 @@ class TableReasoner:
     # ------------------------------------------------------------------ #
     def attach(self, dataframes: dict, model: Optional[SemanticModel],
                vindex: Optional[ValueIndex], cards: Optional[dict] = None,
-               index_version: Optional[str] = None) -> None:
+               index_version: Optional[str] = None,
+               relationship_context: str = "") -> None:
         self.dataframes = dataframes or {}
         self.model = model
         self.vindex = vindex
@@ -168,6 +169,7 @@ class TableReasoner:
         # share cards with the planner for schema rendering + compile context
         self.planner._cards = self.cards
         self.planner._coverage_anchors = []
+        self.planner._relationship_context = relationship_context or ""
 
     @property
     def ready(self) -> bool:

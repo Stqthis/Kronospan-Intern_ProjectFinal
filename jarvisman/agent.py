@@ -198,7 +198,7 @@ class Agent:
         if not dfs:
             self.semantic_model = None
             self.value_index = None
-            self.reasoner.attach({}, None, None)
+            self.reasoner.attach({}, None, None, relationship_context="")
             return
         # Prefer the model built at index time (it carries the LLM meanings);
         # fall back to the persisted copy, then to a fresh statistical build.
@@ -221,8 +221,12 @@ class Agent:
         except Exception:
             cards = {}
         iv = str(getattr(self.rag, "index_version", len(dfs)))
+        try:
+            rel_ctx = self.rag._build_relationship_context()
+        except Exception:
+            rel_ctx = ""
         self.reasoner.attach(dfs, sm, self.value_index, cards=cards,
-                             index_version=iv)
+                             index_version=iv, relationship_context=rel_ctx)
 
     # ------------------------------------------------------------------ #
     # Schemas                                                            #

@@ -304,7 +304,7 @@ class ChartWindow(QDialog):
                 self._hide_annot()
                 return
             target = None
-            for patch in ax.patches:                      # bars
+            for patch in ax.patches:
                 contains, _ = patch.contains(event)
                 if contains:
                     h, w = patch.get_height(), patch.get_width()

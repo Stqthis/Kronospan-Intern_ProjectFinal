@@ -106,7 +106,7 @@ DERIVED METRICS & ALIAS SCOPE:
 - ALIAS UNIQUENESS: All generated names inside "alias" strings must be unique across BOTH the "aggregations" array and the "derived" array to prevent data overwrites during execution.
 
 JOIN SAFETY FRAMEWORK:
-A join block may ONLY be emitted if both tables exist, the target joining key columns exist, and the relationship is explicitly stated and verified in the schema block. If an unverified join is required to answer the query, set "requires_code": true or request clarification.
+A join block may be emitted when both tables exist and the join key columns appear in the VERIFIED table relationships section of the schema block. Prefer a join over "requires_code" when a verified relationship connects the tables the question needs. If no verified relationship covers the needed join, set "requires_code": true or request clarification.
 
 ### OUTPUT REQUIREMENTS CONTRACT
 - Return EXACTLY one valid JSON object.
@@ -219,7 +219,9 @@ class PlanResult:
 
 class Planner:
     _cards = None
+    _relationship_context = ""     # verified cross-table relationships, injected into the schema block
     _coverage_anchors = None
+    
     def __init__(self, ollama, chat_model: str) -> None:
         self.ollama = ollama
         self.chat_model = chat_model
@@ -258,6 +260,12 @@ class Planner:
                   extra_evidence: str = "") -> PlanResult:
         schema_block = render_for_prompt(model, list(dataframes.keys()),
                                           cards=self._cards)
+        if self._relationship_context:
+            schema_block = (
+                schema_block
+                + "\n\n# VERIFIED table relationships (you MAY emit a join block using these):\n"
+                + self._relationship_context
+            )
         user = self._user_prompt(question, schema_block, evidence, extra_evidence)
         calls = 0
         raw = ""
