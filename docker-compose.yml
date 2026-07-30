@@ -1,0 +1,94 @@
+# Full local stack: Ollama (models) + Jarvisman (assistant).
+#
+#   docker compose up -d ollama
+#   docker compose run --rm app index /files            # index mounted files
+#   docker compose run --rm app ask "your question"
+#   docker compose run --rm app chat                    # interactive
+#
+# Put your PDFs/Excels under ./files (or change the bind mount below).
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - /usr/share/ollama/.ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    environment:
+      # --- Speed-only settings: none of these change model weights, sampling,
+      # or output tokens, so answer quality/accuracy is unaffected. ---
+      #
+      # Keep BOTH routed models resident at once (qwen2.5-coder:32b for
+      # plan/codegen, llama3:70b for understanding/synthesis). Without this,
+      # Ollama's cache can evict one model to load the other on every
+      # alternating call, turning a normal query into two full model loads.
+      # The Spark's unified memory has room for both simultaneously.
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      # Never idle-unload (mirrors the app's own KEEP_ALIVE=-1, but this
+      # covers warmup/list calls and any other client hitting this server).
+      OLLAMA_KEEP_ALIVE: "-1"
+      # Mathematically equivalent attention computation, just faster and
+      # lighter on VRAM/unified-memory pressure -- no effect on output.
+      OLLAMA_FLASH_ATTENTION: "1"
+      # This app is single-user/sequential (one desktop GUI, one query at a
+      # time) -- serving multiple parallel request slots per model just
+      # reserves extra KV-cache memory nobody uses. Freeing that memory lets
+      # the model use a bigger/faster KV cache for the one real request.
+      OLLAMA_NUM_PARALLEL: "1"
+    # NVIDIA GPU passthrough -- requires the nvidia-container-toolkit
+    # installed on the host (DGX Spark: `sudo apt install
+    # nvidia-container-toolkit && sudo nvidia-ctk runtime configure
+    # --runtime=docker && sudo systemctl restart docker`). Without this the
+    # container falls back to CPU, which is dramatically slower for both
+    # models.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Persistent backend API: the WHOLE pipeline (agent + index + model
+  # access) served over JSON. The desktop app connects as a thin client with
+  #   RAG_BACKEND_URL=http://<host>:8800 python app.py
+  # It shares the same /data volume as `app`, so the existing index is used
+  # as-is — no re-indexing.
+  api:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["python", "-m", "jarvisman.server"]
+    restart: unless-stopped
+    ports:
+      - "8800:8800"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      RAG_DATA_DIR: /data
+      RAG_API_PORT: "8800"
+    volumes:
+      - /home/installer/.offline_rag_assistant:/data
+      - ./files:/files:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8800/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      RAG_DATA_DIR: /data
+      # RAG_CHAT_MODEL: qwen2.5-coder:14b   # override for smaller machines
+    volumes:
+      - /home/installer/.offline_rag_assistant:/data
+      - ./files:/files:ro

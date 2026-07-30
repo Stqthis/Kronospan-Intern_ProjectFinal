@@ -1,0 +1,43 @@
+# --------------------------------------------------------------------------- #
+# Python                                                                       #
+# --------------------------------------------------------------------------- #
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+venv/
+env/
+.venv/
+
+# --------------------------------------------------------------------------- #
+# Company data -- NEVER commit. Git history is permanent, so anything that
+# lands here once stays recoverable even after a later delete.
+# --------------------------------------------------------------------------- #
+# Source documents (the mounted data folder + any stray spreadsheets/PDFs)
+files/
+data/
+*.xlsx
+*.xls
+*.pdf
+*.csv
+
+# Index / cache artifacts built FROM company data
+*.pkl
+*.faiss
+table_cards.json
+table_profile.json
+profile.json
+plan_cache.json
+
+# Eval + tuning artifacts: these carry real questions, real entity names and
+# verified ground-truth figures from the production workbooks.
+questions.jsonl
+test_results.json
+eval_questions.txt
+eval_run.txt
+rules.txt
+rules.txt.*
+
+# Local scratch tests
+test_funds.py

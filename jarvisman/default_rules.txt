@@ -1,0 +1,59 @@
+# Default house rules shipped with the app. These are standing policies the
+# planner and codegen apply to EVERY answer. They are tuned to the Kronospan
+# data shapes (funds/deposits, directorships, working capital, loans).
+#
+# To override, create your own rules file at <RAG_DATA_DIR>/rules.txt (or set
+# RAG_HOUSE_RULES). One rule per line; '#' starts a comment; blank lines ignored.
+
+# ---- Money / currency ------------------------------------------------------
+# "in EUR", "in Euro", "EUR equivalent", "converted", "denominated in EUR" all
+# mean: use the column that already holds the EUR-converted amount, summed over
+# ALL matching rows -- never re-filter by CURRENCY and never use the original
+# foreign-currency amount for that total.
+When a table has a column named AMOUNT EURO, treat it as the EUR-equivalent value; "total funds", "funds in EUR", and "EUR equivalent" mean SUM(AMOUNT EURO).
+FOREIGN CURRENCY holds the original-currency amount; only use it when the question explicitly asks for the amount in the original/local currency.
+When funds are broken down PER CURRENCY, report each currency's total using FOREIGN CURRENCY (the amount in that currency) -- for example CaixaBank per currency is EUR from AMOUNT EURO but MAD and MXN from FOREIGN CURRENCY -- unless the question explicitly says "EUR equivalent per currency".
+In working-capital tables, the EUR-equivalent figures are the columns ending in TEUR (Available Facility TEUR, Utilised Facility TEUR, Unutilised Facility TEUR, Total Funds Available TEUR); the plain Available/Utilised columns are in local currency.
+
+# ---- Summary / total rows --------------------------------------------------
+Never include summary or grand-total rows in an aggregation. A row whose COMPANY/label cell is blank, "Total", "Grand Total", or "Sum" is a summary row and must be excluded from SUM/COUNT/AVG over companies.
+Columns literally named "Total ..." (e.g. Total Facility, Total Funds Available) are pre-computed totals; do not sum them together with their component columns.
+
+# ---- Point-in-time snapshots ("as at <date>") ------------------------------
+Each data file is a point-in-time snapshot. For "as at <date>" questions, use the snapshot dated on/for that date (DATE, REPORT_DATE, or CALC_DATE) rather than mixing dates.
+For directorship or company questions comparing two dates (e.g. Dec 2023 vs Dec 2024), compare the two dated snapshots and report only the differences.
+
+# ---- Company identity ------------------------------------------------------
+Always show the company NAME together with its company CODE when the table has both (the code is the stable identifier and reveals name changes). Every list of companies MUST contain the COMPANY_CODE column — e.g. "PO01  Kronospan Italia s.r.l.", never just the name.
+Company codes (e.g. CY09, KS01) are unique per company; use the code, not the name, to detect renamed companies across periods.
+Company GROUPS ("South group", "North group", "Asia group", "Silva", ...) live in the COMPANY_GROUP_NAME column (or a Company Group / CO. GROUP column). Filter that column with a contains-match; never try to detect the group from the company name.
+
+# ---- Interest rates --------------------------------------------------------
+For interest-rate questions on funds/deposits use the RATE % column; on working capital use Total Interest Rate; on loans use TOTAL_INTEREST_R. When listing rates, also show the currency, company, and bank as requested.
+Report interest rates as PERCENTAGES with a % sign (use-case format: 4.236%), never as raw fractions: a rate column holding 0.04236 means 4.236%. When both a percent column (RATE %) and a fraction column (INTEREST RATE) exist, use the percent one.
+When sorting rates descending, keep one row per fund/account with COMPANY, BANK, RATE % and CURRENCY as columns, exactly like the use-case table.
+
+# ---- Loans (LTL / 3rd party) ----------------------------------------------
+In loan schedules, OUTSTANDING_BCE is the outstanding balance and TOBEDRAWN is the undrawn/to-be-drawn amount; MARGIN, BASERATE, and TOTAL_INTEREST_R are loan properties. Use rows where CONTRACT_STATE is "Actual" for a given date; ignore the "Opening" seed row for point-in-time balances.
+For 3rd-party loan exposure, split or group by Lender's Group (bank group) unless the question asks for the individual Lender.
+
+# ---- Answer shaping: answer the question that was asked -------------------
+Answer only what was asked. A yes/no question gets a direct "Yes" or "No" first, then one short sentence of reason -- never a dump of all rows about the entity.
+For "are there any changes / differences between <period A> and <period B>" questions, compute the difference between the two dated snapshots and reply: "No, ... (unchanged)" or "Yes, ... " naming only what changed. Do not list everything about the person or company.
+If the data for a requested date or period is not loaded, say so plainly (e.g. "I only have the <date> snapshot") instead of answering from a different date.
+
+# ---- Directorships (CY05) --------------------------------------------------
+To list the companies where a person is a director, filter DIRECTOR_NAME for that person and return the distinct COMPANY_CODE + COMPANY_NAME pairs. Director names may be stored "Surname, First" with stray spaces; match on the name tokens, not an exact string.
+For company COUNTRY use COMPANY_COUNTRY_NAME. Do NOT use COMPANY_COUNTRY_NAME_ENGLISH -- it is unreliable and partly empty in this data.
+To detect a company NAME change across two periods, compare COMPANY_NAME for the same COMPANY_CODE between the two dated snapshots; the code is the stable key. Report each change as "CODE - new name (old name: CODE - old name)".
+Snapshot comparisons (directorship changes, name changes, "from <date> until <date>") need BOTH dated snapshots loaded as tables. If only one snapshot is loaded, state which snapshot date you have (REPORT_DATE) and that the comparison needs the other snapshot — never return an empty answer and never silently answer from a single date.
+
+# ---- Shared address (CY05) -------------------------------------------------
+For "which companies share the same address", group the rows (within the requested country) by Address and report which company codes have an identical address and which differ -- with their codes.
+
+# ---- Company codes vs ownership flags ---------------------------------------
+Company codes look like CY09 / PO01 / KS01 / CM21 (2-4 letters + digits). USH, USH-L and USH-B are ownership/reporting flags, NEVER company codes — never present them as codes and never prefix company names with them. If a table has no company-code column (e.g. WCR sheets), show the company name alone.
+Name changes are detected ONLY from CY05 Group-Company snapshots: compare COMPANY_NAME for the same COMPANY_CODE between two REPORT_DATE snapshots. WCR and CY28 sheets must NEVER be used to detect renames (their company lists differ for business reasons, not renames). If two CY05 snapshots covering the requested period are not loaded, reply stating which CY05 snapshot dates ARE loaded and that the comparison needs the missing one.
+
+# ---- Loan property questions --------------------------------------------------
+For "general info / properties of a loan" questions return ONE ROW PER CONTRACT: drop_duplicates on the contract identifier (CONTRACT_CODE / Reference No.) and show only the property columns (borrower NAME, lender, ISO_CODE/currency, FACILITY_AMOUNT, START_DATE, END_DATE, MARGIN, BASE_RATE_PERIOD, TOTAL_INTEREST_RATE). Never return the daily schedule rows (thousands of CALC_DATE rows) for a properties question; take the latest Actual row per contract for current rates.
