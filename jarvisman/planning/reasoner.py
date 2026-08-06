@@ -557,7 +557,8 @@ class TableReasoner:
         lead = list(dict.fromkeys(
             n for n in (routed + value_tables) if n in self.dataframes))
         if lead:
-            return {n: self.dataframes[n] for n in lead[:cap]}
+            chosen = self._ensure_column_coverage(evidence.question, lead[:cap], cap)
+            return {n: self.dataframes[n] for n in chosen}
 
         # No signal -> keep the cacheable stable-order block for small workbooks
         if len(all_names) <= 6:
@@ -566,6 +567,38 @@ class TableReasoner:
         chosen = [n for n in ranked if n in self.dataframes] or all_names[:cap]
         return {n: self.dataframes[n] for n in chosen}
 
+
+
+    def _ensure_column_coverage(self, question: str, chosen: list,
+                                cap: int) -> list:
+        """Value/date routing can pick sheets that merely CONTAIN a
+        mentioned value while lacking the COLUMN the question needs
+        ('Italy' appears in one sheet, but only another has Address -- the
+        address question then dead-ends with 'column does not exist').
+        If the question names a real column that none of the chosen
+        tables carries, append the best table that has it."""
+        ql = (question or "").lower()
+        col_tables: dict = {}
+        for name, df in self.dataframes.items():
+            try:
+                for c in df.columns:
+                    cs = str(c).strip().lower()
+                    if len(cs) >= 4 and cs in ql:
+                        col_tables.setdefault(cs, []).append(name)
+            except Exception:
+                continue
+        out = list(chosen)
+        for cs, tables in col_tables.items():
+            if any(t in out for t in tables):
+                continue
+            try:
+                extra = max(tables, key=lambda t: self.dataframes[t].shape[0])
+            except Exception:
+                extra = tables[0]
+            if extra not in out:
+                out.append(extra)
+        return out[: cap + 2]
+        
     @staticmethod
     def _first_alias(plan: QueryPlan) -> str:
         from jarvisman.planning.query_plan import PlanValidator

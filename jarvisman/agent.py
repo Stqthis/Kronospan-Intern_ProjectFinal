@@ -13,6 +13,7 @@ from jarvisman.llm.ollama_client import OllamaClient
 from jarvisman.retrieval.rag import RAGPipeline
 from jarvisman.planning.reasoner import TableReasoner
 from jarvisman.planning import code_resolver
+from jarvisman.planning import continuity
 from jarvisman.retrieval.retrieval import tokenize
 from jarvisman.runtime.sandbox import run_query, run_sandboxed
 from jarvisman.semantics.semantic_model import build_semantic_model, load_semantic_model
@@ -176,6 +177,9 @@ class Agent:
         # chat path has continuity like a normal chatbot.
         self.history: list = []          # [{"q":..., "answer":..., "tool":...}]
         self.max_history_turns = 12
+        self._last_company: str = ""      # last company asked about (continuity)
+        self._last_analysis_q: str = ""   # last data question (for follow-ups)
+        self._last_answer_text: str = ""  # last answer text (for 're-explain')
 
     # ------------------------------------------------------------------ #
     # Tables + semantic layer                                            #
@@ -642,6 +646,9 @@ class Agent:
         answer = answer[:600]
         self.history.append({"q": query, "answer": answer,
                              "tool": res.get("tool")})
+        if res.get("tool") == "analyze":
+            self._last_analysis_q = query
+            self._last_answer_text = answer
         if len(self.history) > self.max_history_turns:
             self.history = self.history[-self.max_history_turns:]
 
@@ -694,6 +701,40 @@ class Agent:
             return self._text_result(
                 "That choice belongs to an earlier question and has expired "
                 "-- please ask the question again.", streamed=False)
+
+        # ---- Conversation continuity -------------------------------------
+        # (a) "are you sure / is that right" -> re-explain the LAST answer,
+        #     never recompute (a doubt-prompt must not change a correct figure).
+        if self._last_answer_text and continuity.is_reexplain(query):
+            try:
+                prompt = continuity.reexplain_prompt(self._last_analysis_q,
+                                                     self._last_answer_text)
+                out = self.ollama.chat(
+                    cfg.model_for("synthesize", self.chat_model),
+                    [{"role": "user", "content": prompt}],
+                    options={"temperature": 0.0, "num_predict": 320}).strip()
+                if out:
+                    result = self._text_result(out, streamed=False)
+                    result["tool"] = "chat"
+                    return result
+            except Exception:
+                pass
+        # (b) implicit follow-up ("what about this?") -> carry the last company
+        if self._last_company and continuity.wants_carryover(query, self._last_company):
+            expanded = continuity.expand_followup(query, self._last_analysis_q,
+                                                  self._last_company)
+            if expanded and expanded != query:
+                if progress_callback:
+                    progress_callback(f"Continuing with {self._last_company} ...")
+                result = self._run_analysis(expanded, progress_callback)
+                # make the carried-over subject VISIBLE, never silent.
+                # _run_analysis returns a dict; guard defensively regardless.
+                if isinstance(result, dict):
+                    if result.get("text"):
+                        result["text"] = (f"(For {self._last_company})\n\n"
+                                          + result["text"])
+                    result["tool"] = "analyze"
+                return result
 
         decision: Optional[dict] = None
         tool = self._route_fast(query)
@@ -1130,6 +1171,10 @@ class Agent:
                 if progress_callback:
                     progress_callback("Resolved company code to name ...")
                 query = new_q
+            for _n in (_rnotes or []):
+                _m = _n.split("to '", 1)
+                if len(_m) == 2:
+                    self._last_company = _m[1].rstrip("'")
         except Exception:
             pass
         # Tier 1: structured plan over the semantic model -- grounded against
