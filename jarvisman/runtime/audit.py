@@ -42,6 +42,14 @@ def tables_used(result: dict) -> list:
             out.append(name)
     return out
 
+def _stages() -> dict:
+    """Per-stage model time for the question just answered; {} if unavailable."""
+    try:
+        from jarvisman.runtime import timing
+        return timing.snapshot()
+    except Exception:
+        return {}
+
 
 def log(question: str, result: dict, seconds: float = 0.0,
         client: str = "app") -> None:
@@ -63,6 +71,7 @@ def log(question: str, result: dict, seconds: float = 0.0,
             "rows": result.get("row_count"),
             "code": result.get("code") or "",
             "seconds": round(float(seconds), 2),
+            "stages": _stages(),
         }
         with open(_path(), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")

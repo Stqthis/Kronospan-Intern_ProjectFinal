@@ -18,6 +18,8 @@ from jarvisman.retrieval.retrieval import tokenize
 from jarvisman.runtime.sandbox import run_query, run_sandboxed
 from jarvisman.semantics.semantic_model import build_semantic_model, load_semantic_model
 from jarvisman.semantics.value_index import ValueIndex
+from jarvisman.runtime import timing
+timing.reset()
 
 def _yes_label() -> str:
     return "Ναι, κάνε το" if getattr(cfg, "UI_LANG", "en") == "el" else "Yes, do that"
@@ -732,6 +734,17 @@ class Agent:
         if self.dataframes and self.reasoner.pending_clarify:
             forced = self.reasoner.consume_option(query)
             if forced is not None:
+                if forced.get("unmatched"):
+                    # A pending clarification is open and this message is not
+                    # one of its options. Never route it to the planner: a chip
+                    # label is not a question, and answering it produces a real
+                    # figure for the wrong thing.
+                    result = self._text_result(
+                        "I still need to know which reading you meant -- "
+                        "please pick one of the options above, or rephrase "
+                        "the question if neither fits.", streamed=False)
+                    result["tool"] = "chat"
+                    return result
                 if forced.get("declined"):
                     result = self._text_result(
                         "No problem -- I won't make that assumption. "

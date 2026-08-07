@@ -52,6 +52,8 @@ _PROSE_INTENT_RE = re.compile(
     r"trend\w*|pattern\w*|notable|unusual|stands? ?out|concerning|"
     r"should (we|i|they)|what do you)\b", re.I)
 
+_LOOSE_RE = re.compile(r"[^0-9a-z\u0370-\u03ff]+")
+
 
 def sibling_choice(question, model, dataframes, max_opts: int = 12):
     """No period/entity signal + several SAME-SCHEMA sheets -> ask which one.
@@ -161,18 +163,29 @@ class TableReasoner:
         if not p:
             return None
         mn = norm_text(message)
+        # Punctuation-insensitive comparison. Option labels carry apostrophes
+        # and parentheses ("Each {what}'s own (original) amounts"); a smart
+        # quote from the UI, or an apostrophe stripped by _clean_columns, is
+        # enough to break strict equality. A failed match used to fall through
+        # to the planner, which then answered the CHIP TEXT as if it were a
+        # data question -- real pandas, wrong question, plausible numbers.
+        _loose = lambda s: _LOOSE_RE.sub("", norm_text(s))
+        ml = _loose(message)
         chosen = None
         if mn.isdigit() and 1 <= int(mn) <= len(p["options"]):
             chosen = p["options"][int(mn) - 1]
         else:
             for opt in p["options"]:
-                if mn == norm_text(opt["label"]) \
-                        or (opt.get("column") and mn == norm_text(opt["column"])):
+                if ml == _loose(opt["label"]) \
+                        or (opt.get("column") and ml == _loose(opt["column"])):
                     chosen = opt
                     break
-        self.pending_clarify = None       # one clarification max, ever
         if chosen is None:
-            return None
+            # Keep the clarification ALIVE. Clearing it here destroyed the
+            # pending state AND let the message through as a fresh question.
+            return {"question": p["question"], "bind": None, "term": "",
+                    "unmatched": True}
+        self.pending_clarify = None       # one clarification max, ever
         if p.get("kind") == "table_choice":
             # Rewrite the question with the chosen period and re-run:
             # content_route() then resolves it deterministically, so there is

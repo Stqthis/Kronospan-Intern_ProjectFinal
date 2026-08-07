@@ -480,7 +480,10 @@ class RAGPipeline:
         context, sources = self._build_context(hits)
         
         # Calculate confidence (average score)
-        confidence = sum(hit.get("score", 0) for hit in hits) / len(hits) if hits else 0
+        # hits are (score, chunk) tuples -- see retrieve()'s return type. This
+        # line treated them as dicts, so every document-path answer raised
+        # AttributeError: 'tuple' object has no attribute 'get'.
+        confidence = (sum(score for score, _ in hits) / len(hits)) if hits else 0.0
         
         # Use simple system prompt
         messages = [

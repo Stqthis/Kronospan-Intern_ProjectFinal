@@ -30,7 +30,17 @@ UNDERSTANDING_MODEL = os.environ.get("RAG_UNDERSTANDING_MODEL", "")
 
 def model_for(role: str, chat_model: str) -> str:
     """Resolve a task ROLE to a concrete model name, falling back to the
-    given chat_model when the role-specific model is not configured."""
+    given chat_model when the role-specific model is not configured.
+
+    Also records the role so the timing module can attribute the model call
+    that follows. Every call site evaluates this inline as chat()'s first
+    argument, so the role is always the one about to run.
+    """
+    try:
+        from jarvisman.runtime import timing
+        timing.set_pending(role)
+    except Exception:
+        pass
     if role == "plan":
         return CODE_MODEL or PLAN_MODEL or chat_model
     if role == "codegen":
