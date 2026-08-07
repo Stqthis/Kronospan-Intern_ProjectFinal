@@ -183,6 +183,12 @@ def _t(key: str) -> str:
 
 def _qss() -> str:
     T = THEME
+    # Tables read the system palette unless every surface is named here, so a
+    # dark desktop paints black rows under dark theme text. Every table colour
+    # below is therefore explicit -- never inherited.
+    _hover = T.get("row_hover", T["panel2"])
+    _sel = T.get("sel_bg", T["accent"])
+    _seltx = T.get("sel_text", T["accent_text"])
     return f"""
     QMainWindow, QWidget {{ background: {T['bg']}; color: {T['text']};
         font-size: 14px; }}
@@ -195,7 +201,8 @@ def _qss() -> str:
     QFrame#sep {{ background: {T['border']}; max-height: 1px; border: none; }}
     QComboBox, QLineEdit {{ background: {T['panel2']}; color: {T['text']};
         border: 1px solid {T['border']}; border-radius: 8px;
-        padding: 7px 10px; selection-background-color: {T['accent_dim']}; }}
+        padding: 7px 10px; selection-background-color: {_sel};
+        selection-color: {_seltx}; }}
     QComboBox:focus, QLineEdit:focus {{ border: 1px solid {T['accent']}; }}
     QComboBox::drop-down {{ border: none; background: transparent;
         width: 26px; subcontrol-origin: padding;
@@ -203,12 +210,14 @@ def _qss() -> str:
     QComboBox::down-arrow {{ image: url({_down_arrow_svg(T['muted'])});
         width: 10px; height: 7px; margin-right: 9px; }}
     QComboBox QAbstractItemView {{ background: {T['panel2']};
-        color: {T['text']}; selection-background-color: {T['accent_dim']};
+        color: {T['text']}; selection-background-color: {_sel};
+        selection-color: {_seltx};
         border: 1px solid {T['border']}; outline: none; }}
     QPushButton {{ background: {T['panel2']}; color: {T['text']};
         border: 1px solid {T['border']}; border-radius: 8px;
         padding: 8px 14px; }}
     QPushButton:hover {{ border: 1px solid {T['accent']}; }}
+    QPushButton:focus {{ border: 2px solid {T['accent']}; }}
     QPushButton:disabled {{ color: {T['muted']}; }}
     QPushButton#primary {{ background: {T['accent']}; color: {T['accent_text']};
         border: none; font-weight: 700; }}
@@ -221,9 +230,37 @@ def _qss() -> str:
     QListWidget {{ background: {T['panel2']}; color: {T['text']};
         border: 1px solid {T['border']}; border-radius: 8px; padding: 4px; }}
     QListWidget::item {{ padding: 5px 6px; border-radius: 6px; }}
-    QListWidget::item:selected {{ background: {T['accent_dim']}; }}
+    QListWidget::item:selected {{ background: {_sel};
+        color: {_seltx}; }}
     QTextBrowser {{ background: {T['bg']}; color: {T['text']};
         border: none; font-size: 14px; }}
+
+    /* ---- tables: every surface named explicitly ---------------------- */
+    QTableWidget, QTableView {{ background: {T['panel']};
+        alternate-background-color: {T['panel2']}; color: {T['text']};
+        gridline-color: {T['border']}; border: 1px solid {T['border']};
+        border-radius: 8px; outline: none;
+        selection-background-color: {_sel};
+        selection-color: {_seltx}; }}
+    QTableWidget::item, QTableView::item {{ background: transparent;
+        color: {T['text']}; padding: 5px 8px; border: none; }}
+    QTableWidget::item:hover, QTableView::item:hover {{ background: {_hover};
+        color: {T['text']}; }}
+    QTableWidget::item:selected, QTableView::item:selected {{
+        background: {_sel}; color: {_seltx}; }}
+    QTableWidget::item:selected:!active, QTableView::item:selected:!active {{
+        background: {_sel}; color: {_seltx}; }}
+    QHeaderView {{ background: {T['panel2']}; border: none; }}
+    QHeaderView::section {{ background: {T['panel2']}; color: {T['text']};
+        padding: 7px 8px; border: none;
+        border-right: 1px solid {T['border']};
+        border-bottom: 1px solid {T['border']}; font-weight: 600; }}
+    QHeaderView::section:hover {{ background: {T['accent_dim']};
+        color: {T['text']}; }}
+    QHeaderView::section:last {{ border-right: none; }}
+    QTableCornerButton::section {{ background: {T['panel2']};
+        border: none; border-bottom: 1px solid {T['border']}; }}
+
     QProgressBar {{ background: {T['panel2']}; border: 1px solid {T['border']};
         border-radius: 6px; height: 6px; }}
     QProgressBar::chunk {{ background: {T['accent']}; border-radius: 6px; }}
@@ -231,9 +268,17 @@ def _qss() -> str:
     QScrollBar::handle:vertical {{ background: {T['border']};
         border-radius: 5px; min-height: 30px; }}
     QScrollBar::handle:vertical:hover {{ background: {T['muted']}; }}
-    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+    QScrollBar:horizontal {{ background: transparent; height: 10px;
+        margin: 2px; }}
+    QScrollBar::handle:horizontal {{ background: {T['border']};
+        border-radius: 5px; min-width: 30px; }}
+    QScrollBar::handle:horizontal:hover {{ background: {T['muted']}; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
+    QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
     QStatusBar {{ background: {T['panel']}; color: {T['muted']}; }}
     QSplitter::handle {{ background: {T['border']}; }}
+    QToolTip {{ background: {T['panel']}; color: {T['text']};
+        border: 1px solid {T['border']}; padding: 5px 8px; }}
     QPushButton#chip {{ background: {T['panel2']}; color: {T['text']};
         border: 1px solid {T['border']}; border-radius: 16px;
         padding: 9px 16px; text-align: center; }}
@@ -252,7 +297,6 @@ def _qss() -> str:
     QLabel#suggest {{ color: {T['muted']}; font-size: 12px; }}
     QLabel#typing {{ color: {T['accent']}; font-size: 12px; }}
     """
-
 
 class MainWindow(QMainWindow):
     _prov_seq = 0
@@ -1705,38 +1749,40 @@ class MainWindow(QMainWindow):
         self._append_html("".join(out))
         return True
 
-    def _append_reply_time(self) -> None:
-        """One muted line under the finished answer: how long it took. Shown
-        only AFTER completion (the status bar covers 'during')."""
-        t0 = getattr(self, "_q_t0", None)
-        if t0 is None:
-            return
-        import time as _time
-        secs = _time.monotonic() - t0
-        self._q_t0 = None
-        label = (f"{secs:.1f}s" if secs < 120
-                 else f"{int(secs // 60)}m {int(secs % 60)}s")
-        T = self.current_theme
-        self._append_html(
-            f'<div style="color:{T["muted"]}; font-size:10px; '
-            f'margin:2px 0 6px 0;">\u23f1 answered in {label}</div>')
+    def _append_answer_footer(self, result: dict = None) -> None:
+        """One muted footer under the finished answer: elapsed time and the
+        tables the generated code read. Previously two separate divs at two
+        font sizes, emitted from four call sites in inconsistent order.
 
-    def _append_table_provenance(self, result: dict) -> None:
-        """Always-visible provenance: which tables the generated code read.
-        Auditability is what makes the numbers defensible — never hide it."""
-        try:
-            from jarvisman.runtime import audit as _audit
-            used = _audit.tables_used(result)
-        except Exception:
-            used = []
-        if not used:
+        Provenance is what makes the numbers defensible -- never hidden. The
+        timing always renders once a question has started, so a missing line
+        means a bug, not a fast answer."""
+        t0 = getattr(self, "_q_t0", None)
+        if t0 is None and result is None:
+            return
+        parts = []
+        if t0 is not None:
+            import time as _time
+            secs = _time.monotonic() - t0
+            self._q_t0 = None
+            parts.append("\u23f1 " + (f"{secs:.1f}s" if secs < 120
+                         else f"{int(secs // 60)}m {int(secs % 60)}s"))
+        if result is not None:
+            try:
+                from jarvisman.runtime import audit as _audit
+                used = _audit.tables_used(result)
+            except Exception:
+                used = []
+            if used:
+                shown = "; ".join(html.escape(u) for u in used[:4])
+                more = f" (+{len(used) - 4} more)" if len(used) > 4 else ""
+                parts.append(f"Source tables: {shown}{more}")
+        if not parts:
             return
         T = self.current_theme
-        shown = "; ".join(html.escape(u) for u in used[:4])
-        more = f" (+{len(used) - 4} more)" if len(used) > 4 else ""
         self._append_html(
             f'<div style="color:{T["muted"]}; font-size:11px; '
-            f'margin-top:4px;">Source tables: {shown}{more}</div>')
+            f'margin:4px 0 8px 0;">{" \u00b7 ".join(parts)}</div>')
 
     def _on_answer(self, result: dict) -> None:
         # audit every answered question (question -> code -> tables -> answer)
@@ -1753,7 +1799,7 @@ class MainWindow(QMainWindow):
         # streamed replies are already in the transcript; render extras inline
         if result.get("streamed"):
             self._render_answer(result)
-            self._append_reply_time()
+            self._append_answer_footer(result)
             return
         # otherwise collect the whole answer and wrap it in one card
         self._buf = []
@@ -1762,6 +1808,7 @@ class MainWindow(QMainWindow):
         finally:
             frags, self._buf = self._buf, None
         if not frags:
+            self._append_answer_footer(result)
             return
         
         # Store answer text for copying
@@ -1839,7 +1886,7 @@ class MainWindow(QMainWindow):
         self.chat.setTextCursor(cur)
         self.chat.ensureCursorVisible()
         self._flush_pending_table()
-        self._append_reply_time()
+        self._append_answer_footer(result)
 
 
     def _render_answer(self, result: dict) -> None:
@@ -1882,7 +1929,7 @@ class MainWindow(QMainWindow):
                         f'<span style="color:{THEME["muted"]}; '
                         f'font-size:12px;">{html.escape(m.group(0))}</span>')
                 if presented:
-                    self._append_table_provenance(result)
+                    self._append_answer_footer(result)
                     if result.get("code"):
                         self._append_code(result["code"])
                     self._maybe_offer_chart(question, result)
@@ -1911,7 +1958,7 @@ class MainWindow(QMainWindow):
                 self._stash_big_table(_h, _r, result.get("row_count"))
             else:
                 self._append_html(self._styled_table(result["table_html"]))
-        self._append_table_provenance(result)
+        self._append_answer_footer(result)
         if result.get("code"):
             self._append_code(result["code"])
         options = result.get("options") or []
@@ -2134,17 +2181,13 @@ class MainWindow(QMainWindow):
         lines = code.splitlines() or [code]
         expanded = cid in self._code_expanded
         if expanded:
-            # The code occupies the blocks right after the link's block, one
-            # per code line; match them by content and remove the whole run.
-            b, li, last = block.next(), 0, None
-            while b.isValid() and li < len(lines):
-                if not b.text().strip():          # spacer block from insertion
-                    last, b = b, b.next()
-                    continue
-                if b.text().strip() != lines[li].strip():
-                    break
-                last, li, b = b, li + 1, b.next()
-            if last is not None and li == len(lines):
+            # Blocks were tagged with the code id on insertion, so the run is
+            # identified exactly. Matching by text content used to fail on any
+            # code containing a blank line -- which is most generated pandas.
+            b, last = block.next(), None
+            while b.isValid() and b.userState() == cid:
+                last, b = b, b.next()
+            if last is not None:
                 c2 = QTextCursor(self.chat.document())
                 c2.setPosition(block.position() + block.length() - 1)
                 c2.setPosition(last.position() + last.length() - 1,
@@ -2161,6 +2204,11 @@ class MainWindow(QMainWindow):
                 f'padding:6px 12px; border-radius:8px; font-size:12px; '
                 f'white-space:pre-wrap; border:1px solid {T["border"]};">'
                 f'{escaped}</pre>')
+            end_no = self.chat.document().findBlock(c2.position()).blockNumber()
+            b = block.next()
+            while b.isValid() and b.blockNumber() <= end_no:
+                b.setUserState(cid)
+                b = b.next()
             self._code_expanded.add(cid)
         # flip the disclosure arrow (the link itself keeps its href)
         arrow = "\u25be" if cid in self._code_expanded else "\u25b8"

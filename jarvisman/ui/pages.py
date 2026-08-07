@@ -53,6 +53,22 @@ def _tables(window) -> dict:
     return getattr(window.agent, "dataframes", {}) or {}
 
 
+def _later(msec: int, owner, fn):
+    """A single-shot timer OWNED by `owner`.
+
+    The static QTimer.singleShot belongs to nobody and fires even after its
+    target widget is destroyed -- which aborts the process, because the
+    RuntimeError surfaces inside the Qt event loop where nothing can catch
+    it. A timer parented to the widget is deleted with it, so a rebuild that
+    tears down cards mid-animation is simply a no-op.
+    """
+    t = QTimer(owner)
+    t.setSingleShot(True)
+    t.timeout.connect(fn)
+    t.start(max(0, int(msec)))
+    return t
+
+
 def _bridge(window):
     """RemoteBridge when the app runs as a thin client of the Docker
     backend (RAG_BACKEND_URL), else None."""
@@ -106,28 +122,35 @@ def _ease(t: float) -> float:
 
 
 def _fmt_int(n) -> str:
+    """Integer in the active locale style (see runtime.numfmt)."""
+    from jarvisman.runtime import numfmt
     try:
-        return f"{int(n):,}"
+        return numfmt.fmt(int(n))
     except Exception:
         return str(n)
 
 
 def _human(n) -> str:
-    """2223000000 -> '2.22B'; 491400000 -> '491.4M'; 12345 -> '12,345'."""
+    """2223000000 -> '2.22B'; 12345 -> '12,345' -- abbreviated for KPI cards,
+    but using the SAME decimal/grouping convention as chat, tables and charts.
+    The dashboard used to hardcode US separators while numfmt resolved to EU
+    from the locale, so one screen showed both."""
+    from jarvisman.runtime import numfmt
     try:
         n = float(n)
     except Exception:
         return str(n)
+    eu = numfmt.style() == "eu"
+    def _dec(s):
+        return s.replace(".", ",") if eu else s
     a = abs(n)
     if a >= 1e9:
-        return f"{n / 1e9:.2f}B"
+        return _dec(f"{n / 1e9:.2f}") + "B"
     if a >= 1e6:
-        return f"{n / 1e6:.1f}M"
+        return _dec(f"{n / 1e6:.1f}") + "M"
     if a >= 1e5:
-        return f"{n / 1e3:.0f}K"
-    if float(n).is_integer():
-        return f"{int(n):,}"
-    return f"{n:,.2f}"
+        return _dec(f"{n / 1e3:.0f}") + "K"
+    return numfmt.fmt(n)
 
 
 _AMOUNT_HINTS = ("eur", "amount", "balance", "value", "total", "outstanding",
@@ -357,6 +380,11 @@ class ChartCard(QFrame):
         if not labels or not values:
             self.draw_empty()
             return
+        if not labels or not values:
+            self.draw_empty()
+            return
+        n = min(len(labels), len(values))
+        labels, values = list(labels)[:n], list(values)[:n]
         if not _animations_on():
             self._draw_frame(kind, labels, values, color, 1.0)
             return
@@ -373,10 +401,15 @@ class ChartCard(QFrame):
                                  1.0 if done else t)
             except Exception:
                 timer.stop()
+                self.draw_error()
                 return
             if done:
                 timer.stop()
-        self._draw_frame(kind, labels, values, color, 0.04)
+        try:
+            self._draw_frame(kind, labels, values, color, 0.04)
+        except Exception:
+            self.draw_error()
+            return
         timer.timeout.connect(_tick)
         timer.start(self.INTERVAL)
 
@@ -485,6 +518,21 @@ class ChartCard(QFrame):
                 color=T.get("muted", "#8f9ab0"), fontsize=10)
         self.canvas.draw_idle()
 
+    def draw_error(self, message: str = "Chart data was not usable") -> None:
+        """A visible failure state. A silently blank card is indistinguishable
+        from real zero data, which is the worse outcome on a finance
+        dashboard."""
+        T = self._theme
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+        ax.set_facecolor(T.get("panel", "#111624"))
+        ax.axis("off")
+        ax.text(0.5, 0.56, "\u26a0", ha="center", va="center",
+                color=T.get("warn", "#fbbf24"), fontsize=20)
+        ax.text(0.5, 0.34, message, ha="center", va="center",
+                color=T.get("muted", "#8f9ab0"), fontsize=9, wrap=True)
+        self.canvas.draw_idle()
+
 
 class ChartPopup(QDialog):
     """Enlarged pop-up of a dashboard chart; replays the entrance animation
@@ -528,7 +576,7 @@ class ChartPopup(QDialog):
 
     def showEvent(self, ev):                              # noqa: N802
         super().showEvent(ev)
-        QTimer.singleShot(60, lambda: self.card.play(self._spec))
+        _later(60, self, lambda: self.card.play(self._spec))
 
 
 # --------------------------------------------------------------------------- #
@@ -625,7 +673,7 @@ class DashboardPage(QWidget):
             _fade_in(card, 260, card)
             # stagger the entrances left-to-right for a lively dashboard
             delay = 120 * i if _animations_on() else 0
-            QTimer.singleShot(delay, lambda c=card, s=spec: c.play(s))
+            _later(delay, card, lambda c=card, s=spec: c.play(s))
 
     def _popup(self, spec) -> None:
         try:

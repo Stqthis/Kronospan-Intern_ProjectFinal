@@ -1,18 +1,43 @@
-# Full local stack: Ollama (models) + Jarvisman (assistant).
+# Full local stack: Ollama (models) + Jarvisman (API + CLI).
 #
-#   docker compose up -d ollama
-#   docker compose run --rm app index /files            # index mounted files
-#   docker compose run --rm app ask "your question"
-#   docker compose run --rm app chat                    # interactive
+# Copy .env.example to .env first, then:
 #
-# Put your PDFs/Excels under ./files (or change the bind mount below).
+#   docker compose up -d ollama api          # the persistent stack
+#   docker compose run --rm cli index /files # index mounted files
+#   docker compose run --rm cli ask "your question"
+#
+# The desktop GUI runs NATIVELY on the workstation, not in a container:
+#   RAG_BACKEND_URL=http://<dgx-host>:8800 python app.py
+#
+# Put your PDFs/Excels under ./files (or set FILES_DIR in .env).
+
+x-jarvis-env: &jarvis-env
+  OLLAMA_HOST: http://ollama:11434
+  RAG_DATA_DIR: /data
+  RAG_API_KEY: ${RAG_API_KEY:-}
+  RAG_CHAT_MODEL: ${RAG_CHAT_MODEL:-qwen2.5-coder:32b}
+  RAG_CODE_MODEL: ${RAG_CODE_MODEL:-}
+  RAG_UNDERSTANDING_MODEL: ${RAG_UNDERSTANDING_MODEL:-}
+  RAG_KEEP_ALIVE: ${RAG_KEEP_ALIVE:--1}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   ollama:
     image: ollama/ollama:latest
+    restart: unless-stopped
+    logging: *default-logging
+    # Bound to localhost by default: the model server has no authentication
+    # of its own, so it must not be reachable from the wider network. Set
+    # OLLAMA_BIND=0.0.0.0 in .env only on a trusted, firewalled subnet.
     ports:
-      - "11434:11434"
+      - "${OLLAMA_BIND:-127.0.0.1}:11434:11434"
     volumes:
-      - /usr/share/ollama/.ollama:/root/.ollama
+      - ${OLLAMA_MODELS_DIR:-ollama_models}:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
@@ -53,42 +78,64 @@ services:
               count: all
               capabilities: [gpu]
 
-  # Persistent backend API: the WHOLE pipeline (agent + index + model
-  # access) served over JSON. The desktop app connects as a thin client with
+  # Persistent backend API: the WHOLE pipeline (agent + index + model access)
+  # served over JSON. The desktop app connects as a thin client with
   #   RAG_BACKEND_URL=http://<host>:8800 python app.py
-  # It shares the same /data volume as `app`, so the existing index is used
-  # as-is — no re-indexing.
   api:
-    build: .
+    build:
+      context: .
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    image: jarvisman:latest
     depends_on:
       ollama:
         condition: service_healthy
     entrypoint: ["python", "-m", "jarvisman.server"]
     restart: unless-stopped
+    logging: *default-logging
+    # Also localhost-only unless RAG_API_KEY is set and you deliberately
+    # widen it: /ask executes model-generated pandas over company data.
     ports:
-      - "8800:8800"
+      - "${API_BIND:-127.0.0.1}:8800:8800"
     environment:
-      OLLAMA_HOST: http://ollama:11434
-      RAG_DATA_DIR: /data
+      <<: *jarvis-env
       RAG_API_PORT: "8800"
     volumes:
-      - /home/installer/.offline_rag_assistant:/data
-      - ./files:/files:ro
+      - jarvis_index:/data
+      - ${FILES_DIR:-./files}:/files:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8800/health"]
       interval: 15s
       timeout: 5s
       retries: 20
+    security_opt:
+      - no-new-privileges:true
 
-  app:
-    build: .
+  # One-shot CLI runs (indexing, ad-hoc questions, the offline check suite).
+  # Shares the SAME index volume as the API, so anything indexed here is
+  # served by the API immediately -- no re-indexing.
+  cli:
+    build:
+      context: .
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    image: jarvisman:latest
+    profiles: ["tools"]        # never started by `up`; use `run --rm cli ...`
     depends_on:
       ollama:
         condition: service_healthy
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-      RAG_DATA_DIR: /data
-      # RAG_CHAT_MODEL: qwen2.5-coder:14b   # override for smaller machines
+    environment: *jarvis-env
     volumes:
-      - /home/installer/.offline_rag_assistant:/data
-      - ./files:/files:ro
+      - jarvis_index:/data
+      - ${FILES_DIR:-./files}:/files:ro
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  jarvis_index:
+    name: jarvis_index
+    external: true
+  ollama_models:
+    name: ollama_models

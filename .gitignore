@@ -41,3 +41,12 @@ rules.txt.*
 
 # Local scratch tests
 test_funds.py
+# Local environment / secrets -- the template (.env.example) IS committed,
+# the real file never is.
+.env
+.env.*
+!.env.example
+
+# Runtime error log written by Agent._log_error
+audit/
+errors.log

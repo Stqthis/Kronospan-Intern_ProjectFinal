@@ -1,11 +1,15 @@
-
-
-PyQt6           # desktop GUI
-faiss-cpu>=1.7.4       # vector similarity search (CPU build)
-PyMuPDF>=1.23.0        # PDF text extraction (imported as `fitz`)
-pandas>=2.0.0          # Excel ingestion + DataFrame handling
-openpyxl>=3.1.0        # .xlsx engine used by pandas.read_excel
-matplotlib>=3.7.0      # plotting (Agg backend inside the sandbox)
-numpy>=1.24.0          # arrays / embedding matrices
-requests>=2.31.0       # talks to the local Ollama HTTP API
-
+# Core runtime -- everything the CLI and the API server need.
+# The GUI's extra dependency lives in requirements-gui.txt so the backend
+# image never installs Qt.
+#
+# Upper bounds pin the major version: patch/minor upgrades still come in on a
+# rebuild, but a breaking 3.x pandas cannot silently land in a production
+# image months from now.
+faiss-cpu>=1.7.4,<2         # vector similarity search (CPU build)
+PyMuPDF>=1.23.0,<2          # PDF text extraction (imported as `fitz`)
+pandas>=3.0,<4            # Excel ingestion + DataFrame handling
+openpyxl>=3.1.0,<4          # .xlsx engine used by pandas.read_excel
+python-calamine>=0.2.0,<1   # faster Rust .xlsx reader; ingestion prefers it
+matplotlib>=3.7.0,<4        # plotting (Agg backend inside the sandbox)
+numpy>=1.24.0,<3            # arrays / embedding matrices
+requests>=2.31.0,<3         # talks to the local Ollama HTTP API

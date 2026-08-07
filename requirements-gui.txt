@@ -1,0 +1,5 @@
+# Desktop GUI only. Install on the workstation that runs app.py:
+#     pip install -r requirements.txt -r requirements-gui.txt
+# The Docker images do NOT install this -- the backend is headless.
+-r requirements.txt
+PyQt6>=6.5,<7

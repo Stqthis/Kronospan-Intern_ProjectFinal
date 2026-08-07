@@ -612,7 +612,20 @@ class Agent:
     # ------------------------------------------------------------------ #
     def handle(self, query: str, *args, **kwargs):
 
-        res = self._handle_inner(query, *args, **kwargs)
+        try:
+            res = self._handle_inner(query, *args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            # A question the pipeline cannot serve must not reach the user as a
+            # raw traceback. The full detail is written to an error log, so
+            # nothing is lost for debugging -- only the presentation changes.
+            self._log_error(query, exc)
+            return self._text_result(
+                "I hit an internal error working on that one, so I have no "
+                "answer I'd trust enough to show you. Try asking it a "
+                "different way -- naming the sheet or the column usually "
+                "helps.\n\n"
+                f"(Technical detail for the log: {type(exc).__name__})",
+                streamed=False)
         try:
             opts = res.get("options") or []
             if opts:
@@ -631,6 +644,23 @@ class Agent:
             pass
         return res
 
+    @staticmethod
+    def _log_error(query: str, exc: BaseException) -> None:
+        """Append a failed turn to errors.log. Never raises -- a logging
+        problem must not replace the error the user already hit."""
+        import datetime as _dt
+        import os as _os
+        import traceback as _tb
+        try:
+            d = _os.path.join(cfg.DATA_DIR, "audit")
+            _os.makedirs(d, exist_ok=True)
+            with open(_os.path.join(d, "errors.log"), "a",
+                      encoding="utf-8") as fh:
+                fh.write(f"\n=== {_dt.datetime.now():%Y-%m-%d %H:%M:%S} ===\n"
+                         f"question: {query}\n{_tb.format_exc()}")
+        except Exception:
+            pass
+    
     def _record_turn(self, query: str, res: dict) -> None:
         """Store a compact summary of this turn so later questions can refer
         back to it. We keep the question plus a short text rendering of the
@@ -649,6 +679,18 @@ class Agent:
         if res.get("tool") == "analyze":
             self._last_analysis_q = query
             self._last_answer_text = answer
+            # Learn the conversational subject from the plan that actually
+            # ran. Previously _last_company was only ever set as a side effect
+            # of code->name resolution, so a question that named the company
+            # directly ("total for Acme Bank") left it empty and every
+            # follow-up afterwards silently failed to carry over.
+            try:
+                subj = continuity.subject_from_plan(
+                    getattr(self.reasoner, "last_plan", None))
+                if subj:
+                    self._last_company = subj
+            except Exception:
+                pass
         if len(self.history) > self.max_history_turns:
             self.history = self.history[-self.max_history_turns:]
 
@@ -666,7 +708,18 @@ class Agent:
         return "\n".join(lines)
 
     def clear_history(self) -> None:
+        """Start a genuinely fresh conversation. Clearing only ``history`` left
+        the remembered subject and last answer alive, so 'New conversation'
+        could still answer a follow-up with the previous session's company."""
         self.history = []
+        self._last_company = ""
+        self._last_analysis_q = ""
+        self._last_answer_text = ""
+        self._recent_option_labels = []
+        try:
+            self.reasoner.last_plan = None
+        except Exception:
+            pass
 
     def _handle_inner(
         self,
@@ -703,6 +756,15 @@ class Agent:
                 "-- please ask the question again.", streamed=False)
 
         # ---- Conversation continuity -------------------------------------
+        # (0) "remove the last row" -> the plan schema cannot express positional
+        #     row removal, so this used to fall through to raw codegen and fail
+        #     unpredictably. Answer it honestly instead of improvising.
+        if continuity.is_positional_row_edit(query):
+            result = self._text_result(
+                continuity.positional_row_edit_reply(self._last_analysis_q),
+                streamed=False)
+            result["tool"] = "chat"
+            return result
         # (a) "are you sure / is that right" -> re-explain the LAST answer,
         #     never recompute (a doubt-prompt must not change a correct figure).
         if self._last_answer_text and continuity.is_reexplain(query):

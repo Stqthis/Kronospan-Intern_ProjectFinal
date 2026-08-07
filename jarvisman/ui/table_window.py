@@ -140,18 +140,10 @@ class TableWindow(QDialog):
 
     # ------------------------------------------------------------------ #
     def _style_table(self, t: QTableWidget) -> None:
-        T = self.theme
-        if not T:
+        if not self.theme:
             return
-        t.setStyleSheet(
-            f"QTableWidget {{ background:{T.get('panel', '#fff')}; "
-            f"alternate-background-color:{T.get('panel2', '#f4f4f4')}; "
-            f"color:{T.get('text', '#222')}; "
-            f"gridline-color:{T.get('border', '#ddd')}; }}"
-            f"QHeaderView::section {{ background:{T.get('panel2', '#eee')}; "
-            f"color:{T.get('text', '#222')}; padding:6px; "
-            f"border:0px; border-bottom:1px solid {T.get('border', '#ddd')}; "
-            f"font-weight:600; }}")
+        from jarvisman.ui.theme_manager import ThemeManager
+        t.setStyleSheet(ThemeManager.table_stylesheet(self.theme))
 
     # ------------------------------------------------------------------ #
     def _tsv(self, rows: list) -> str:
