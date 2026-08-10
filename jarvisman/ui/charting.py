@@ -18,7 +18,34 @@ DEFAULT_THEME = {
     "muted": "#5b6b81", "grid": "#d5e0ee", "accent": "#0f5aa8",
     "cycle": ["#0f5aa8", "#2e7d4f", "#b7791f", "#c0563f", "#7a5cae",
               "#2f8f9e", "#c1567f", "#5b6b81", "#3f7fd1", "#8f7a3f"],
+    "ramp": ["#79aee0", "#0b3f78"],
 }
+
+
+# --------------------------------------------------------------------------- #
+# Theme-aligned colours                                                       #
+# --------------------------------------------------------------------------- #
+def _hex_to_rgb(h: str) -> tuple:
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _rgb_to_hex(rgb) -> str:
+    return "#%02x%02x%02x" % tuple(max(0, min(255, int(round(c)))) for c in rgb)
+
+
+def series_colors(theme: dict, n: int) -> list:
+    """n colours sampled across the theme's sequential ramp (light -> deep), so
+    a single-series bar chart or a pie reads as one coherent theme hue (blue for
+    Dark/Light) with each bar/slice a distinct shade -- instead of the multi-hue
+    ``cycle``, which is reserved for charts with several series to tell apart."""
+    lo, hi = (theme.get("ramp") or DEFAULT_THEME["ramp"])[:2]
+    a, b = _hex_to_rgb(lo), _hex_to_rgb(hi)
+    if n <= 1:
+        return [hi]
+    return [_rgb_to_hex(tuple(a[k] + (b[k] - a[k]) * (i / (n - 1))
+                              for k in range(3)))
+            for i in range(n)]
 
 
 # --------------------------------------------------------------------------- #
@@ -153,7 +180,7 @@ def render(fig, df: pd.DataFrame, spec: ChartSpec,
            theme: Optional[dict] = None, title: str = "") -> None:
     """Draw spec over df onto fig (cleared first). Never raises -- on bad input
     it draws a short message instead."""
-    theme = theme or DEFAULT_THEME
+    theme = {**DEFAULT_THEME, **(theme or {})}
     fig.clear()
     ax = fig.add_subplot(111)
     apply_theme(fig, ax, theme)
@@ -186,7 +213,8 @@ def _render_inner(fig, ax, df, spec, theme, title):
         vals = frame[ys[0]].clip(lower=0)
         wedges, _txt, _aut = ax.pie(
             vals, labels=[str(v) for v in frame[spec.x]],
-            autopct=lambda p: f"{p:.0f}%", colors=cycle,
+            autopct=lambda p: f"{p:.0f}%",
+            colors=series_colors(theme, len(vals)),
             textprops={"color": theme["text"], "fontsize": 9})
         ax.set_title(title or f"{ys[0]} by {spec.x}")
         ax.axis("equal")
@@ -194,7 +222,8 @@ def _render_inner(fig, ax, df, spec, theme, title):
 
     # ---- scatter ---------------------------------------------------------- #
     if ct == "scatter" and len(ys) >= 1 and spec.x and spec.x in nums:
-        ax.scatter(df[spec.x], df[ys[0]], color=cycle[0], alpha=0.8, s=28)
+        ax.scatter(df[spec.x], df[ys[0]], color=theme.get("accent", cycle[0]),
+                   alpha=0.8, s=28)
         ax.set_xlabel(spec.x); ax.set_ylabel(ys[0])
         ax.set_title(title or f"{ys[0]} vs {spec.x}")
         return
@@ -235,11 +264,21 @@ def _render_inner(fig, ax, df, spec, theme, title):
 
 
 def _plot_frame(ax, frame, ct, cycle, theme, spec, stacked=False):
-    """Plot a (possibly multi-column) frame as bars/lines/area."""
+    """Plot a (possibly multi-column) frame as bars/lines/area.
+
+    One series -> the theme ramp (each bar a distinct shade of the theme hue;
+    line/area in the accent), so the chart reads as one coherent colour. Several
+    series -> the multi-hue ``cycle`` so they stay tellable apart in the legend.
+    """
     cols = list(frame.columns)
-    colors = [cycle[i % len(cycle)] for i in range(len(cols))]
+    single = len(cols) == 1
+    accent = theme.get("accent", cycle[0])
+    colors = [accent] if single else [cycle[i % len(cycle)]
+                                      for i in range(len(cols))]
     if ct == "barh":
         frame.plot.barh(ax=ax, color=colors, legend=len(cols) > 1, width=0.8)
+        if single:
+            _shade_bars(ax, theme)
         if spec.value_labels and len(cols) == 1:
             _label_bars(ax, ax.patches, theme, horizontal=True)
     elif ct in ("line", "area"):
@@ -253,6 +292,8 @@ def _plot_frame(ax, frame, ct, cycle, theme, spec, stacked=False):
     else:  # bar (vertical)
         frame.plot.bar(ax=ax, color=colors, legend=len(cols) > 1, width=0.8,
                        stacked=stacked)
+        if single:
+            _shade_bars(ax, theme)
         ax.tick_params(axis="x", rotation=30)
         if spec.value_labels and len(cols) == 1:
             _label_bars(ax, ax.patches, theme, horizontal=False)
@@ -262,3 +303,14 @@ def _plot_frame(ax, frame, ct, cycle, theme, spec, stacked=False):
         leg.get_frame().set_edgecolor(theme["grid"])
         for t in leg.get_texts():
             t.set_color(theme["text"])
+
+
+def _shade_bars(ax, theme) -> None:
+    """Recolour a single-series bar plot's bars across the theme ramp, so each
+    bar is a distinct on-theme shade. Done on the patches after pandas plots,
+    because pandas colours per-column (one colour for a single series)."""
+    from matplotlib.patches import Rectangle
+    bars = [p for p in ax.patches if isinstance(p, Rectangle)]
+    shades = series_colors(theme, len(bars))
+    for patch, col in zip(bars, shades):
+        patch.set_facecolor(col)

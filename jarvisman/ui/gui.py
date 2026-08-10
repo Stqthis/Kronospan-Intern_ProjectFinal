@@ -1348,6 +1348,12 @@ class MainWindow(QMainWindow):
         self._system_line(
             f"Loaded saved index ({self.store.count} text chunk(s), "
             f"{n_tables} table(s) restored).", THEME["muted"])
+        if getattr(self.rag, "index_stale", False):
+            self._system_line(
+                "\u26a0 This index was built by an older data-parsing version, "
+                f"so recent parsing fixes aren't applied to it. Re-index your "
+                f"source files (or run 'python -m jarvisman.cli reindex') to "
+                f"apply them.", THEME.get("warn", "#fbbf24"))
         self._refresh_workspace()
 
     def _new_chat(self) -> None:

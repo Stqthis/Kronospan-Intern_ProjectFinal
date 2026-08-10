@@ -12,12 +12,10 @@ from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSpinBox,
     QVBoxLayout,
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QKeySequence, QShortcut
 from matplotlib.backends.backend_qtagg import (
     FigureCanvasQTAgg,
     NavigationToolbar2QT,
@@ -36,13 +34,15 @@ class ChartWindow(QDialog):
                  theme: Optional[dict] = None, parent=None) -> None:
         super().__init__(parent)
         self.df = df if df is not None else pd.DataFrame()
-        self.theme = theme or charting.DEFAULT_THEME
+        # Merge over the default so any missing key (a caller passing a partial
+        # palette) can never raise mid-draw and blank the chart.
+        self.theme = {**charting.DEFAULT_THEME, **(theme or {})}
         self._title = title or "Chart"
         self.setWindowTitle(("Chart \u2014 " + self._title)[:90])
-        # A QDialog defaults to a close button only -- no maximize, so the
-        # window could not be fullscreened. Asking for the min/max hints
-        # turns it into a normal resizable window with the full titlebar
-        # controls (and enables double-click-titlebar to maximize).
+        # A QDialog defaults to a close button only. Ask for the min/max hints
+        # so it behaves like a normal application window: the titlebar maximize
+        # (the rectangle at top-right) and double-click-titlebar both work, and
+        # there is no separate in-app fullscreen button to get out of sync.
         self.setWindowFlags(
             self.windowFlags()
             | Qt.WindowType.WindowMinimizeButtonHint
@@ -52,17 +52,21 @@ class ChartWindow(QDialog):
         self._anim = None
         self._anim_token = 0
         self._shown_once = False
+        # Animate the chart in ONCE, on first show -- not on every control
+        # change. Re-running the grow/sweep each time a combo changed made the
+        # window feel unstable; now switching type/measure redraws instantly.
+        self._animate_pending = getattr(cfg, "ANIMATIONS", True)
         self._build()
         self._replot()
 
     def showEvent(self, ev):                              # noqa: N802
-        """Replay the entrance animation on first show. Windows built
-        before .show() (e.g. ChartWindow.from_table) used to animate while
-        still hidden, so the user only ever saw the finished frame."""
+        """Replay the entrance animation on first show. The window is built
+        (and first rendered) while still hidden, so the one-shot animation is
+        armed here, once the canvas is actually visible."""
         super().showEvent(ev)
         if not self._shown_once:
             self._shown_once = True
-            if getattr(cfg, "ANIMATIONS", True):
+            if self._animate_pending:
                 QTimer.singleShot(50, self._replot)
 
     # ------------------------------------------------------------------ #
@@ -123,19 +127,7 @@ class ChartWindow(QDialog):
             controls.addWidget(w)
         controls.addWidget(self.sort_desc)
         controls.addStretch(1)
-
-        # Fullscreen toggle: fills the whole screen so a chart with many
-        # categories is readable. Also bound to F11; Esc exits fullscreen.
-        self.fs_btn = QPushButton("\u26f6  Fullscreen")
-        self.fs_btn.setToolTip("Toggle fullscreen (F11)")
-        self.fs_btn.clicked.connect(self._toggle_fullscreen)
-        controls.addWidget(self.fs_btn)
         root.addLayout(controls)
-
-        QShortcut(QKeySequence(Qt.Key.Key_F11), self,
-                  activated=self._toggle_fullscreen)
-        QShortcut(QKeySequence(Qt.Key.Key_Escape), self,
-                  activated=self._exit_fullscreen)
 
         self.fig = Figure(figsize=(6.5, 4.2))
         self.canvas = FigureCanvasQTAgg(self.fig)
@@ -170,23 +162,6 @@ class ChartWindow(QDialog):
         """)
 
     # ------------------------------------------------------------------ #
-    def _toggle_fullscreen(self) -> None:
-        """Flip between fullscreen and normal. The matplotlib canvas has
-        stretch=1, so it grows to fill the extra space and redraws crisply."""
-        if self.isFullScreen():
-            self._exit_fullscreen()
-        else:
-            self.showFullScreen()
-            if hasattr(self, "fs_btn"):
-                self.fs_btn.setText("\u26f6  Exit fullscreen")
-
-    def _exit_fullscreen(self) -> None:
-        if self.isFullScreen():
-            self.showNormal()
-            if hasattr(self, "fs_btn"):
-                self.fs_btn.setText("\u26f6  Fullscreen")
-
-    # ------------------------------------------------------------------ #
     def _spec(self) -> charting.ChartSpec:
         hue = self.hue_combo.currentText()
         y = self.y_combo.currentText()
@@ -206,7 +181,10 @@ class ChartWindow(QDialog):
         self._stop_anim()
         charting.render(self.fig, self.df, self._spec(), self.theme,
                         title=self._title)
-        if getattr(cfg, "ANIMATIONS", True):
+        # Animate only the first visible paint; every later re-plot (a control
+        # change) draws instantly so the window stays steady.
+        if self._animate_pending and self.isVisible():
+            self._animate_pending = False
             self._animate_entrance()
         else:
             self.canvas.draw_idle()

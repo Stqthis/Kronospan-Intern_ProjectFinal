@@ -46,6 +46,10 @@ class ThemeManager:
         "sel_text": "#ffffff",
         "cycle": ["#3d8bfd", "#22c55e", "#eab308", "#a855f7", "#ec4899",
                   "#14b8a6", "#f97316", "#64748b", "#60a5fa", "#84cc16"],
+        # sequential same-hue ramp (light -> deep) for single-series bars and
+        # pies, so one chart reads as one coherent theme colour instead of a
+        # rainbow. Dark/Light are blue; Emerald green; Purple violet.
+        "ramp": ["#9ec5ff", "#1c4fb0"],
     }
 
     LIGHT_THEME = {
@@ -73,6 +77,7 @@ class ThemeManager:
         "sel_text": "#ffffff",
         "cycle": ["#0f5aa8", "#2e7d4f", "#b7791f", "#c0563f", "#7a5cae",
                   "#2f8f9e", "#c1567f", "#5b6b81", "#3f7fd1", "#8f7a3f"],
+        "ramp": ["#79aee0", "#0b3f78"],
     }
 
     EMERALD_THEME = {
@@ -99,6 +104,7 @@ class ThemeManager:
         "sel_text": "#ffffff",
         "cycle": ["#10b981", "#34d399", "#a3e635", "#2dd4bf", "#4ade80",
                   "#facc15", "#38bdf8", "#86efac", "#5eead4", "#bef264"],
+        "ramp": ["#7ee7c1", "#0a7f5c"],
     }
 
     PURPLE_THEME = {
@@ -124,6 +130,7 @@ class ThemeManager:
         "sel_text": "#ffffff",
         "cycle": ["#a78bfa", "#ec4899", "#38bdf8", "#f472b6", "#c084fc",
                   "#e879f9", "#818cf8", "#fb7185", "#d8b4fe", "#f0abfc"],
+        "ramp": ["#d3c4fb", "#6b46c1"],
     }
 
     THEMES = {

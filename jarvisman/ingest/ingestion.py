@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import os
@@ -532,6 +530,65 @@ def _fill_merged_headers(path: str, raw_sheets: dict) -> None:
 
 _EU_NUM_RE = re.compile(r"^-?\d{1,3}(\.\d{3})+(,\d+)?$|^-?\d+,\d+$")
 
+# --------------------------------------------------------------------------- #
+# US / EU disambiguation                                                       #
+# --------------------------------------------------------------------------- #
+# The two number styles collide on one shape: a lone 3-digit comma group.
+# '19,999' is nineteen THOUSAND in US style but nineteen-point-999 in EU style,
+# and '250,000' likewise. The old code let _EU_NUM_RE ('^-?\d+,\d+$') match that
+# shape, so US thousands columns were claimed by the EU pass and divided by 1000
+# ('480,500' -> 480.50), while columns that also held a true millions value
+# ('19,999,999', two comma groups) matched NEITHER pass and were left as unparsed
+# strings. Resolve it once, per column, from the values only one style can produce.
+#
+#   US-STRONG: a comma used as a thousands separator in a way EU never writes --
+#              two or more 3-digit groups ('19,999,999') or a group plus a dot
+#              decimal ('1,234.50'); also a plain dot decimal ('1234.56').
+#   EU-STRONG: dot thousands ('1.234.567' / '1.234,56') or a comma decimal with
+#              1-2 digits ('12,5' / '0,75') -- US never puts 1-2 digits after a
+#              comma.
+#   AMBIGUOUS: exactly one 3-digit comma group and nothing else ('19,999').
+_US_STRONG_RE = re.compile(
+    r"^-?\(?\$?\s?\d{1,3}(,\d{3}){2,}(\.\d+)?\)?$"   # 2+ groups: 19,999,999
+    r"|^-?\(?\$?\s?\d{1,3}(,\d{3})+\.\d+\)?$"         # group + decimal: 1,234.50
+    r"|^-?\d+\.\d+$")                                 # plain decimal: 1234.56
+_EU_STRONG_RE = re.compile(
+    r"^-?\d{1,3}(\.\d{3})+(,\d+)?$"                   # dot thousands: 1.234.567(,89)
+    r"|^-?\d+,\d{1,2}$")                              # comma + 1-2 dp: 12,5 / 0,75
+_AMBIG_NUM_RE = re.compile(r"^-?\d{1,3},\d{3}$")      # lone 3-digit group: 19,999
+# a lone dotted 3-digit group ('1.234') is three-way ambiguous -- US decimal,
+# EU thousands, OR an internal code -- so it is NOT strong US evidence; the
+# codes-stay-text contract owns it (see _apply_eu_numbers' comma-required guard).
+_AMBIG_DOT_RE = re.compile(r"^-?\d{1,3}\.\d{3}$")
+
+
+def _column_number_locale(vals) -> "str | None":
+    """Decide whether a string column is US-formatted, EU-formatted, or neither,
+    from the whole column's evidence. A single ambiguous '19,999'-style token is
+    read as US thousands (3-decimal-place money is vanishingly rare, and these
+    columns are overwhelmingly thousands); a lone dotted '1.234' is left alone as
+    a possible code; a column that shows both styles returns None so both passes
+    leave it untouched."""
+    us = eu = ambig_comma = ambig_dot = 0
+    for v in vals:
+        if _AMBIG_DOT_RE.fullmatch(v):
+            ambig_dot += 1
+        elif _US_STRONG_RE.fullmatch(v):
+            us += 1
+        elif _EU_STRONG_RE.fullmatch(v):
+            eu += 1
+        elif _AMBIG_NUM_RE.fullmatch(v):
+            ambig_comma += 1
+    if us and eu:
+        return None                       # contradictory evidence -- don't guess
+    if us:
+        return "us"
+    if eu:
+        return "eu"
+    if ambig_comma and not ambig_dot:
+        return "us"                       # lone 3-digit comma groups -> thousands
+    return None                           # dotted codes / no clear style
+
 
 def _apply_eu_numbers(df: "pd.DataFrame") -> "pd.DataFrame":
     """Convert columns stored in European locale format ('1.234,56') to real
@@ -546,6 +603,11 @@ def _apply_eu_numbers(df: "pd.DataFrame") -> "pd.DataFrame":
             continue
         vals = s.dropna().astype(str).str.strip()
         if len(vals) < 2:
+            continue
+        # only claim columns the whole-column vote reads as EU; a US thousands
+        # column ('19,999', '480,500') is left for _coerce_us_numbers instead of
+        # being divided by 1000 here
+        if _column_number_locale(vals) != "eu":
             continue
         rate = float(vals.map(lambda v: bool(_EU_NUM_RE.fullmatch(v))).mean())
         if rate < 0.8:
@@ -593,8 +655,11 @@ def _coerce_us_numbers(df: "pd.DataFrame") -> "pd.DataFrame":
         vals = vals[vals != ""]
         if len(vals) < 2:
             continue
-        if vals.map(lambda v: bool(_EU_NUM_RE.fullmatch(v))).any():
-            continue  # EU-formatted column: _apply_eu_numbers owns it
+        # claim the column iff the whole-column vote reads it as US; this is the
+        # same decision _apply_eu_numbers used to skip, so exactly one pass owns
+        # any column and a lone '19,999,999' no longer falls through both
+        if _column_number_locale(vals) != "us":
+            continue
         rate = float(vals.map(lambda v: bool(_US_NUM_RE.fullmatch(v))).mean())
         if rate < 0.8:
             continue
