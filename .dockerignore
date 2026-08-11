@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 venv/
 env/
 __pycache__/
@@ -5,3 +6,30 @@ __pycache__/
 .pytest_cache/
 .git/
 files/
+=======
+# Keep the build context small and the image free of dev-only material.
+venv/
+env/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.git/
+.gitignore
+files/
+data/
+*.log
+tests/
+eval/
+run_eval.py
+spark_eval.py
+test_queries.py
+test_resolve.py
+check_rel.py
+*.md
+!README.md
+.env
+.idea/
+.vscode/
+>>>>>>> my-new-branch

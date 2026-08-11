@@ -72,7 +72,10 @@ class VectorStore:
         if removed == 0:
             return 0
         if keep:
-            vecs = np.vstack([self.index.reconstruct(i) for i in keep])
+            # one C-level batch reconstruct, then numpy-pick the kept rows
+            # (replaces one Python->FAISS call per kept vector)
+            all_vecs = self.index.reconstruct_n(0, self.index.ntotal)
+            vecs = all_vecs[keep]
         else:
             vecs = np.zeros((0, self.dim or 1), dtype="float32")
         kept_chunks = []

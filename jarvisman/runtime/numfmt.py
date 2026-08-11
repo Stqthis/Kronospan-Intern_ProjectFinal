@@ -78,7 +78,51 @@ def canon(text: str) -> str:
     return text.replace(",", "")
 
 
+# --------------------------------------------------------------------------- #
+# Interest-rate display                                                        #
+# --------------------------------------------------------------------------- #
 import re as _re
+
+_RATE_COL_RE = _re.compile(r"rate|margin", _re.I)
+
+
+def is_rate_col(name) -> bool:
+    """A column whose values are interest rates / margins (by name)."""
+    return bool(_RATE_COL_RE.search(str(name)))
+
+
+def rate_formatter(values):
+    """Build a per-COLUMN formatter that always renders rates as PERCENTAGES
+    with three decimals and a % sign (use-case format: 4.236%).
+
+    The data holds rates in two conventions: percent (RATE % = 4.236) and
+    fraction (INTEREST RATE = 0.04236). Decided per column: when every
+    non-zero value is <= 1 the column is fractional and is scaled x100 for
+    display; otherwise values are already percent. Display-only — the
+    underlying numbers are never changed."""
+    nonzero = []
+    for v in values:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f == f and f != 0.0 and abs(f) != float("inf"):
+            nonzero.append(abs(f))
+    scale = 100.0 if nonzero and max(nonzero) <= 1.0 else 1.0
+
+    def _f(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        if f != f or abs(f) == float("inf"):
+            return str(v)
+        s = f"{f * scale:.3f}"
+        if style() == "eu":
+            s = s.replace(".", ",")
+        return s + "%"
+    return _f
+
 
 _REFMT_RE = _re.compile(r"(?<![\w.,])(-?\d{4,}(?:\.\d+)?)(?![\d,])(?!\.\d)(?!\w)")
 

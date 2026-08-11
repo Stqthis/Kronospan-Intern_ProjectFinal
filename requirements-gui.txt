@@ -1,0 +1,4 @@
+# Desktop GUI only. Install on the workstation that runs app.py:
+#     pip install -r requirements.txt -r requirements-gui.txt
+-r requirements.txt
+PyQt6>=6.5,<7

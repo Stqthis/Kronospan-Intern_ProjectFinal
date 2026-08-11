@@ -23,6 +23,51 @@ from PyQt6.QtWidgets import (
 )
 
 
+def _condense_rows(headers: list, rows: list) -> tuple[list, list, str]:
+    """Shrink a repetitive table for display. Two information-preserving moves:
+    lift columns that hold one value in every row into a caption, and fold
+    exact-duplicate rows into a single row with a 'count'. Returns
+    (headers, rows, caption). Small or already-unique tables are unchanged with
+    an empty caption. Never lifts away every column, and only collapses when
+    duplication is heavy, so genuinely-varied tables are left alone."""
+    n = len(rows)
+    if n <= 20 or not headers:
+        return headers, rows, ""
+    ncol = len(headers)
+    # 1) constant columns -> caption
+    const_idx = []
+    for c in range(ncol):
+        vals = {(r[c] if c < len(r) else "") for r in rows}
+        if len(vals) <= 1:
+            const_idx.append(c)
+    caption_bits = []
+    keep_idx = list(range(ncol))
+    if const_idx and len(const_idx) < ncol:
+        for c in const_idx:
+            v = rows[0][c] if c < len(rows[0]) else ""
+            caption_bits.append(f"{headers[c]} = {v if v != '' else '(blank)'}")
+        keep_idx = [c for c in range(ncol) if c not in const_idx]
+        headers = [headers[c] for c in keep_idx]
+        rows = [[r[c] if c < len(r) else "" for c in keep_idx] for r in rows]
+    # 2) collapse exact-duplicate rows -> add a count
+    counts: dict = {}
+    order: list = []
+    for r in rows:
+        key = tuple(r)
+        if key not in counts:
+            counts[key] = 0
+            order.append(key)
+        counts[key] += 1
+    if len(order) <= n * 0.6 and len(order) < n:
+        headers = list(headers) + ["count"]
+        rows = [list(k) + [f"{counts[k]:,}"] for k in
+                sorted(order, key=lambda k: counts[k], reverse=True)]
+        caption_bits.append(
+            f"collapsed {n:,} rows \u2192 {len(order):,} unique")
+    return headers, rows, ("  \u2022  ".join(caption_bits) if caption_bits
+                           else "")
+
+
 def _is_number(s: str) -> bool:
     probe = (s or "").replace(",", "").replace("%", "").replace("\u20ac", "").strip()
     if not probe:
@@ -56,14 +101,28 @@ class TableWindow(QDialog):
                  total_rows: Optional[int] = None) -> None:
         super().__init__(parent)
         self.theme = theme or {}
-        self._headers = [str(h) for h in (headers or [])]
-        self._rows = [list(r) for r in (rows or [])]
+        headers = [str(h) for h in (headers or [])]
+        rows = [list(r) for r in (rows or [])]
+        # Collapse repetition at the point of display, so it works no matter
+        # which engine path produced the table (and even if the query-time
+        # condensing didn't run): lift columns that are identical in every row
+        # into a caption, and fold exact-duplicate rows into one with a count.
+        raw_total = total_rows or len(rows)
+        headers, rows, self._condense_note = _condense_rows(headers, rows)
+        self._headers = headers
+        self._rows = rows
         # TRUE row count from the engine. The HTML is capped
         # (QUERY_MAX_TABLE_ROWS), so the caption must not present the capped
         # number as the whole answer.
-        self._total = total_rows or len(self._rows)
+        self._total = raw_total
         self._title = (title or "Result").strip()
         self.setWindowTitle(("Table \u2014 " + self._title)[:90])
+        # QDialog defaults to close-only; ask for the min/max hints so the
+        # window can be maximized/fullscreened like any normal window.
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint)
         self.resize(980, 620)
         self._build()
 
@@ -87,6 +146,8 @@ class TableWindow(QDialog):
                        f"\u00d7 {len(self._headers)} columns \u2014 truncated")
         else:
             cap_txt = f"{len(self._rows):,} rows \u00d7 {len(self._headers)} columns"
+        if getattr(self, "_condense_note", ""):
+            cap_txt += f"    ({self._condense_note})"
         cap = QLabel(cap_txt)
         cap.setStyleSheet(f"color:{self.theme.get('muted', '#888')};")
         top.addWidget(cap)
@@ -134,18 +195,10 @@ class TableWindow(QDialog):
 
     # ------------------------------------------------------------------ #
     def _style_table(self, t: QTableWidget) -> None:
-        T = self.theme
-        if not T:
+        if not self.theme:
             return
-        t.setStyleSheet(
-            f"QTableWidget {{ background:{T.get('panel', '#fff')}; "
-            f"alternate-background-color:{T.get('panel2', '#f4f4f4')}; "
-            f"color:{T.get('text', '#222')}; "
-            f"gridline-color:{T.get('border', '#ddd')}; }}"
-            f"QHeaderView::section {{ background:{T.get('panel2', '#eee')}; "
-            f"color:{T.get('text', '#222')}; padding:6px; "
-            f"border:0px; border-bottom:1px solid {T.get('border', '#ddd')}; "
-            f"font-weight:600; }}")
+        from jarvisman.ui.theme_manager import ThemeManager
+        t.setStyleSheet(ThemeManager.table_stylesheet(self.theme))
 
     # ------------------------------------------------------------------ #
     def _tsv(self, rows: list) -> str:

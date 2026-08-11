@@ -104,8 +104,31 @@ class RelationshipDetector:
                             'strength': match_strength,
                             'type': 'id_pattern_match'
                         })
+
+        # Strategy 4: shared-value join keys on ANY column (incl. name columns
+        # like COMPANY that the key-name strategies above miss). Guarded by BOTH
+        # high coverage AND high distinctness, so real join keys (many distinct
+        # company names overlapping) link, but low-cardinality columns
+        # (Country, Currency) do NOT create spurious relationships.
+        MIN_COVERAGE = 0.6      # >=60% of the smaller column's values are shared
+        MIN_DISTINCT = 8        # need enough distinct values to be a real key
+        for col1 in cols1:
+            for col2 in cols2:
+                coverage, distinct = RelationshipDetector._shared_value_strength(
+                    df1[col1], df2[col2]
+                )
+                if coverage >= MIN_COVERAGE and distinct >= MIN_DISTINCT:
+                    relationships.append({
+                        'left_table': table1_name,
+                        'right_table': table2_name,
+                        'left_column': col1,
+                        'right_column': col2,
+                        'strength': coverage,
+                        'type': 'shared_values'
+                    })
         
         # Remove duplicates, keep strongest
+        
         return RelationshipDetector._deduplicate_relationships(relationships)
     
     @staticmethod
@@ -166,6 +189,32 @@ class RelationshipDetector:
             return intersection / union
         except:
             return 0.0
+
+    @staticmethod
+    def _normalized_values(s: pd.Series) -> set:
+        """Distinct values, normalized for comparison (strip + uppercase),
+        so 'Lignum AG' and ' lignum ag ' count as the same value."""
+        try:
+            return set(
+                v for v in s.dropna().astype(str).str.strip().str.upper().unique()
+                if v and v.lower() != "nan"
+            )
+        except Exception:
+            return set()
+
+    @staticmethod
+    def _shared_value_strength(s1: pd.Series, s2: pd.Series) -> Tuple[float, int]:
+        """Coverage of the SMALLER column's values by the larger, plus its
+        distinct count. Coverage (not Jaccard) so a small lookup table joining
+        a big data table still scores high. Returns (coverage, distinct_count)."""
+        v1 = RelationshipDetector._normalized_values(s1)
+        v2 = RelationshipDetector._normalized_values(s2)
+        if not v1 or not v2:
+            return 0.0, 0
+        smaller = min(len(v1), len(v2))
+        if smaller == 0:
+            return 0.0, 0
+        return len(v1 & v2) / smaller, smaller
     
     @staticmethod
     def _deduplicate_relationships(rels: List[Dict]) -> List[Dict]:

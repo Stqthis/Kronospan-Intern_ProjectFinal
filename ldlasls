@@ -1,0 +1,592 @@
+[1mdiff --git a/jarvisman/ingest/excel_optimizer.py b/jarvisman/ingest/excel_optimizer.py[m
+[1mdeleted file mode 100755[m
+[1mindex 79be00c3..00000000[m
+[1m--- a/jarvisman/ingest/excel_optimizer.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,154 +0,0 @@[m
+[31m-"""Fast Excel indexing with caching and optimization."""[m
+[31m-import os[m
+[31m-import pickle[m
+[31m-import hashlib[m
+[31m-import pandas as pd[m
+[31m-from tqdm import tqdm[m
+[31m-from typing import Tuple, List, Optional[m
+[31m-[m
+[31m-[m
+[31m-class FastExcelIndexer:[m
+[31m-    """Optimized Excel indexing with caching."""[m
+[31m-    [m
+[31m-    def __init__(self, cache_dir='./index_cache'):[m
+[31m-        self.cache_dir = cache_dir[m
+[31m-        os.makedirs(cache_dir, exist_ok=True)[m
+[31m-    [m
+[31m-    @staticmethod[m
+[31m-    def get_file_hash(file_path: str) -> str:[m
+[31m-        """Get MD5 hash of file to detect changes."""[m
+[31m-        try:[m
+[31m-            with open(file_path, 'rb') as f:[m
+[31m-                return hashlib.md5(f.read()).hexdigest()[m
+[31m-        except Exception as e:[m
+[31m-            print(f"Error computing hash: {e}")[m
+[31m-            return None[m
+[31m-    [m
+[31m-    def is_cached(self, file_path: str) -> bool:[m
+[31m-        """Check if file is already indexed."""[m
+[31m-        file_hash = self.get_file_hash(file_path)[m
+[31m-        if not file_hash:[m
+[31m-            return False[m
+[31m-        [m
+[31m-        cache_file = os.path.join(self.cache_dir, f"{file_hash}.pkl")[m
+[31m-        return os.path.exists(cache_file)[m
+[31m-    [m
+[31m-    def load_from_cache(self, file_path: str) -> Optional[Tuple]:[m
+[31m-        """Load cached index."""[m
+[31m-        file_hash = self.get_file_hash(file_path)[m
+[31m-        if not file_hash:[m
+[31m-            return None[m
+[31m-        [m
+[31m-        cache_file = os.path.join(self.cache_dir, f"{file_hash}.pkl")[m
+[31m-        [m
+[31m-        try:[m
+[31m-            with open(cache_file, 'rb') as f:[m
+[31m-                return pickle.load(f)[m
+[31m-        except Exception as e:[m
+[31m-            print(f"Error loading cache: {e}")[m
+[31m-            return None[m
+[31m-    [m
+[31m-    def save_to_cache(self, file_path: str, data: Tuple) -> bool:[m
+[31m-        """Save index to cache."""[m
+[31m-        file_hash = self.get_file_hash(file_path)[m
+[31m-        if not file_hash:[m
+[31m-            return False[m
+[31m-        [m
+[31m-        cache_file = os.path.join(self.cache_dir, f"{file_hash}.pkl")[m
+[31m-        [m
+[31m-        try:[m
+[31m-            with open(cache_file, 'wb') as f:[m
+[31m-                pickle.dump(data, f)[m
+[31m-            return True[m
+[31m-        except Exception as e:[m
+[31m-            print(f"Error saving cache: {e}")[m
+[31m-            return False[m
+[31m-    [m
+[31m-    @staticmethod[m
+[31m-    def load_excel_smart(file_path: str, max_rows: int = 10000, [m
+[31m-                         columns: Optional[List[str]] = None) -> pd.DataFrame:[m
+[31m-        """Load Excel file efficiently."""[m
+[31m-        print(f"Loading {file_path}...")[m
+[31m-        [m
+[31m-        try:[m
+[31m-            df = pd.read_excel([m
+[31m-                file_path,[m
+[31m-                sheet_name=0,[m
+[31m-                nrows=max_rows,[m
+[31m-                usecols=columns[m
+[31m-            )[m
+[31m-            print(f"✓ Loaded {len(df)} rows, {len(df.columns)} columns")[m
+[31m-            return df[m
+[31m-        except Exception as e:[m
+[31m-            print(f"Error loading Excel: {e}")[m
+[31m-            return None[m
+[31m-    [m
+[31m-    @staticmethod[m
+[31m-    def clean_data(df: pd.DataFrame) -> pd.DataFrame:[m
+[31m-        """Clean and prepare data."""[m
+[31m-        print("Cleaning data...")[m
+[31m-        [m
+[31m-        df = df.drop_duplicates()[m
+[31m-        df = df.dropna(thresh=len(df.columns) * 0.5)[m
+[31m-        [m
+[31m-        print(f"✓ After cleaning: {len(df)} rows")[m
+[31m-        return df[m
+[31m-    [m
+[31m-    @staticmethod[m
+[31m-    def create_chunks(df: pd.DataFrame, min_length: int = 10) -> List[str]:[m
+[31m-        """Create text chunks from dataframe."""[m
+[31m-        print("Creating chunks...")[m
+[31m-        [m
+[31m-        chunks = [][m
+[31m-        [m
+[31m-        for idx, row in tqdm(df.iterrows(), total=len(df), desc="Chunking"):[m
+[31m-            chunk_parts = [][m
+[31m-            [m
+[31m-            for col in df.columns:[m
+[31m-                value = row[col][m
+[31m-                if pd.notna(value):[m
+[31m-                    chunk_parts.append(f"{col}: {str(value)}")[m
+[31m-            [m
+[31m-            chunk = " | ".join(chunk_parts)[m
+[31m-            [m
+[31m-            if len(chunk) > min_length:[m
+[31m-                chunks.append(chunk)[m
+[31m-        [m
+[31m-        print(f"✓ Created {len(chunks)} chunks")[m
+[31m-        return chunks[m
+[31m-    [m
+[31m-    def index_excel(self, file_path: str, max_rows: int = 10000,[m
+[31m-                   columns: Optional[List[str]] = None) -> Tuple:[m
+[31m-        """Index Excel file with optimization."""[m
+[31m-        print(f"\nIndexing: {os.path.basename(file_path)}")[m
+[31m-        [m
+[31m-        if self.is_cached(file_path):[m
+[31m-            print("📦 Loading from cache (fast!)...")[m
+[31m-            result = self.load_from_cache(file_path)[m
+[31m-            if result:[m
+[31m-                print("✓ Cache loaded!\n")[m
+[31m-                return result[m
+[31m-        [m
+[31m-        df = self.load_excel_smart(file_path, max_rows, columns)[m
+[31m-        if df is None or df.empty:[m
+[31m-            return None[m
+[31m-        [m
+[31m-        df = self.clean_data(df)[m
+[31m-        chunks = self.create_chunks(df)[m
+[31m-        [m
+[31m-        if not chunks:[m
+[31m-            print("No chunks created!")[m
+[31m-            return None[m
+[31m-        [m
+[31m-        metadata = {[m
+[31m-            'file': os.path.basename(file_path),[m
+[31m-            'rows': len(df),[m
+[31m-            'chunks': len(chunks),[m
+[31m-            'columns': list(df.columns)[m
+[31m-        }[m
+[31m-        [m
+[31m-        print("💾 Saving to cache...")[m
+[31m-        self.save_to_cache(file_path, (chunks, metadata))[m
+[31m-        print("✓ Complete!\n")[m
+[31m-        [m
+[31m-        return chunks, metadata[m
+[1mdiff --git a/jarvisman/ingest/ingestion.py b/jarvisman/ingest/ingestion.py[m
+[1mindex a854f425..ae098de6 100755[m
+[1m--- a/jarvisman/ingest/ingestion.py[m
+[1m+++ b/jarvisman/ingest/ingestion.py[m
+[36m@@ -1,5 +1,3 @@[m
+[31m-[m
+[31m-[m
+ from __future__ import annotations[m
+ [m
+ import os[m
+[36m@@ -532,6 +530,65 @@[m [mdef _fill_merged_headers(path: str, raw_sheets: dict) -> None:[m
+ [m
+ _EU_NUM_RE = re.compile(r"^-?\d{1,3}(\.\d{3})+(,\d+)?$|^-?\d+,\d+$")[m
+ [m
+[32m+[m[32m# --------------------------------------------------------------------------- #[m
+[32m+[m[32m# US / EU disambiguation                                                       #[m
+[32m+[m[32m# --------------------------------------------------------------------------- #[m
+[32m+[m[32m# The two number styles collide on one shape: a lone 3-digit comma group.[m
+[32m+[m[32m# '19,999' is nineteen THOUSAND in US style but nineteen-point-999 in EU style,[m
+[32m+[m[32m# and '250,000' likewise. The old code let _EU_NUM_RE ('^-?\d+,\d+$') match that[m
+[32m+[m[32m# shape, so US thousands columns were claimed by the EU pass and divided by 1000[m
+[32m+[m[32m# ('480,500' -> 480.50), while columns that also held a true millions value[m
+[32m+[m[32m# ('19,999,999', two comma groups) matched NEITHER pass and were left as unparsed[m
+[32m+[m[32m# strings. Resolve it once, per column, from the values only one style can produce.[m
+[32m+[m[32m#[m
+[32m+[m[32m#   US-STRONG: a comma used as a thousands separator in a way EU never writes --[m
+[32m+[m[32m#              two or more 3-digit groups ('19,999,999') or a group plus a dot[m
+[32m+[m[32m#              decimal ('1,234.50'); also a plain dot decimal ('1234.56').[m
+[32m+[m[32m#   EU-STRONG: dot thousands ('1.234.567' / '1.234,56') or a comma decimal with[m
+[32m+[m[32m#              1-2 digits ('12,5' / '0,75') -- US never puts 1-2 digits after a[m
+[32m+[m[32m#              comma.[m
+[32m+[m[32m#   AMBIGUOUS: exactly one 3-digit comma group and nothing else ('19,999').[m
+[32m+[m[32m_US_STRONG_RE = re.compile([m
+[32m+[m[32m    r"^-?\(?\$?\s?\d{1,3}(,\d{3}){2,}(\.\d+)?\)?$"   # 2+ groups: 19,999,999[m
+[32m+[m[32m    r"|^-?\(?\$?\s?\d{1,3}(,\d{3})+\.\d+\)?$"         # group + decimal: 1,234.50[m
+[32m+[m[32m    r"|^-?\d+\.\d+$")                                 # plain decimal: 1234.56[m
+[32m+[m[32m_EU_STRONG_RE = re.compile([m
+[32m+[m[32m    r"^-?\d{1,3}(\.\d{3})+(,\d+)?$"                   # dot thousands: 1.234.567(,89)[m
+[32m+[m[32m    r"|^-?\d+,\d{1,2}$")                              # comma + 1-2 dp: 12,5 / 0,75[m
+[32m+[m[32m_AMBIG_NUM_RE = re.compile(r"^-?\d{1,3},\d{3}$")      # lone 3-digit group: 19,999[m
+[32m+[m[32m# a lone dotted 3-digit group ('1.234') is three-way ambiguous -- US decimal,[m
+[32m+[m[32m# EU thousands, OR an internal code -- so it is NOT strong US evidence; the[m
+[32m+[m[32m# codes-stay-text contract owns it (see _apply_eu_numbers' comma-required guard).[m
+[32m+[m[32m_AMBIG_DOT_RE = re.compile(r"^-?\d{1,3}\.\d{3}$")[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _column_number_locale(vals) -> "str | None":[m
+[32m+[m[32m    """Decide whether a string column is US-formatted, EU-formatted, or neither,[m
+[32m+[m[32m    from the whole column's evidence. A single ambiguous '19,999'-style token is[m
+[32m+[m[32m    read as US thousands (3-decimal-place money is vanishingly rare, and these[m
+[32m+[m[32m    columns are overwhelmingly thousands); a lone dotted '1.234' is left alone as[m
+[32m+[m[32m    a possible code; a column that shows both styles returns None so both passes[m
+[32m+[m[32m    leave it untouched."""[m
+[32m+[m[32m    us = eu = ambig_comma = ambig_dot = 0[m
+[32m+[m[32m    for v in vals:[m
+[32m+[m[32m        if _AMBIG_DOT_RE.fullmatch(v):[m
+[32m+[m[32m            ambig_dot += 1[m
+[32m+[m[32m        elif _US_STRONG_RE.fullmatch(v):[m
+[32m+[m[32m            us += 1[m
+[32m+[m[32m        elif _EU_STRONG_RE.fullmatch(v):[m
+[32m+[m[32m            eu += 1[m
+[32m+[m[32m        elif _AMBIG_NUM_RE.fullmatch(v):[m
+[32m+[m[32m            ambig_comma += 1[m
+[32m+[m[32m    if us and eu:[m
+[32m+[m[32m        return None                       # contradictory evidence -- don't guess[m
+[32m+[m[32m    if us:[m
+[32m+[m[32m        return "us"[m
+[32m+[m[32m    if eu:[m
+[32m+[m[32m        return "eu"[m
+[32m+[m[32m    if ambig_comma and not ambig_dot:[m
+[32m+[m[32m        return "us"                       # lone 3-digit comma groups -> thousands[m
+[32m+[m[32m    return None                           # dotted codes / no clear style[m
+[32m+[m
+ [m
+ def _apply_eu_numbers(df: "pd.DataFrame") -> "pd.DataFrame":[m
+     """Convert columns stored in European locale format ('1.234,56') to real[m
+[36m@@ -547,6 +604,11 @@[m [mdef _apply_eu_numbers(df: "pd.DataFrame") -> "pd.DataFrame":[m
+         vals = s.dropna().astype(str).str.strip()[m
+         if len(vals) < 2:[m
+             continue[m
+[32m+[m[32m        # only claim columns the whole-column vote reads as EU; a US thousands[m
+[32m+[m[32m        # column ('19,999', '480,500') is left for _coerce_us_numbers instead of[m
+[32m+[m[32m        # being divided by 1000 here[m
+[32m+[m[32m        if _column_number_locale(vals) != "eu":[m
+[32m+[m[32m            continue[m
+         rate = float(vals.map(lambda v: bool(_EU_NUM_RE.fullmatch(v))).mean())[m
+         if rate < 0.8:[m
+             continue[m
+[36m@@ -593,8 +655,11 @@[m [mdef _coerce_us_numbers(df: "pd.DataFrame") -> "pd.DataFrame":[m
+         vals = vals[vals != ""][m
+         if len(vals) < 2:[m
+             continue[m
+[31m-        if vals.map(lambda v: bool(_EU_NUM_RE.fullmatch(v))).any():[m
+[31m-            continue  # EU-formatted column: _apply_eu_numbers owns it[m
+[32m+[m[32m        # claim the column iff the whole-column vote reads it as US; this is the[m
+[32m+[m[32m        # same decision _apply_eu_numbers used to skip, so exactly one pass owns[m
+[32m+[m[32m        # any column and a lone '19,999,999' no longer falls through both[m
+[32m+[m[32m        if _column_number_locale(vals) != "us":[m
+[32m+[m[32m            continue[m
+         rate = float(vals.map(lambda v: bool(_US_NUM_RE.fullmatch(v))).mean())[m
+         if rate < 0.8:[m
+             continue[m
+[1mdiff --git a/jarvisman/ui/chart_window.py b/jarvisman/ui/chart_window.py[m
+[1mindex a3ce3e69..adc1fdb7 100755[m
+[1m--- a/jarvisman/ui/chart_window.py[m
+[1m+++ b/jarvisman/ui/chart_window.py[m
+[36m@@ -12,12 +12,10 @@[m [mfrom PyQt6.QtWidgets import ([m
+     QDialog,[m
+     QHBoxLayout,[m
+     QLabel,[m
+[31m-    QPushButton,[m
+     QSpinBox,[m
+     QVBoxLayout,[m
+ )[m
+ from PyQt6.QtCore import Qt, QTimer[m
+[31m-from PyQt6.QtGui import QKeySequence, QShortcut[m
+ from matplotlib.backends.backend_qtagg import ([m
+     FigureCanvasQTAgg,[m
+     NavigationToolbar2QT,[m
+[36m@@ -36,13 +34,15 @@[m [mclass ChartWindow(QDialog):[m
+                  theme: Optional[dict] = None, parent=None) -> None:[m
+         super().__init__(parent)[m
+         self.df = df if df is not None else pd.DataFrame()[m
+[31m-        self.theme = theme or charting.DEFAULT_THEME[m
+[32m+[m[32m        # Merge over the default so any missing key (a caller passing a partial[m
+[32m+[m[32m        # palette) can never raise mid-draw and blank the chart.[m
+[32m+[m[32m        self.theme = {**charting.DEFAULT_THEME, **(theme or {})}[m
+         self._title = title or "Chart"[m
+         self.setWindowTitle(("Chart \u2014 " + self._title)[:90])[m
+[31m-        # A QDialog defaults to a close button only -- no maximize, so the[m
+[31m-        # window could not be fullscreened. Asking for the min/max hints[m
+[31m-        # turns it into a normal resizable window with the full titlebar[m
+[31m-        # controls (and enables double-click-titlebar to maximize).[m
+[32m+[m[32m        # A QDialog defaults to a close button only. Ask for the min/max hints[m
+[32m+[m[32m        # so it behaves like a normal application window: the titlebar maximize[m
+[32m+[m[32m        # (the rectangle at top-right) and double-click-titlebar both work, and[m
+[32m+[m[32m        # there is no separate in-app fullscreen button to get out of sync.[m
+         self.setWindowFlags([m
+             self.windowFlags()[m
+             | Qt.WindowType.WindowMinimizeButtonHint[m
+[36m@@ -52,17 +52,21 @@[m [mclass ChartWindow(QDialog):[m
+         self._anim = None[m
+         self._anim_token = 0[m
+         self._shown_once = False[m
+[32m+[m[32m        # Animate the chart in ONCE, on first show -- not on every control[m
+[32m+[m[32m        # change. Re-running the grow/sweep each time a combo changed made the[m
+[32m+[m[32m        # window feel unstable; now switching type/measure redraws instantly.[m
+[32m+[m[32m        self._animate_pending = getattr(cfg, "ANIMATIONS", True)[m
+         self._build()[m
+         self._replot()[m
+ [m
+     def showEvent(self, ev):                              # noqa: N802[m
+[31m-        """Replay the entrance animation on first show. Windows built[m
+[31m-        before .show() (e.g. ChartWindow.from_table) used to animate while[m
+[31m-        still hidden, so the user only ever saw the finished frame."""[m
+[32m+[m[32m        """Replay the entrance animation on first show. The window is built[m
+[32m+[m[32m        (and first rendered) while still hidden, so the one-shot animation is[m
+[32m+[m[32m        armed here, once the canvas is actually visible."""[m
+         super().showEvent(ev)[m
+         if not self._shown_once:[m
+             self._shown_once = True[m
+[31m-            if getattr(cfg, "ANIMATIONS", True):[m
+[32m+[m[32m            if self._animate_pending:[m
+                 QTimer.singleShot(50, self._replot)[m
+ [m
+     # ------------------------------------------------------------------ #[m
+[36m@@ -123,20 +127,8 @@[m [mclass ChartWindow(QDialog):[m
+             controls.addWidget(w)[m
+         controls.addWidget(self.sort_desc)[m
+         controls.addStretch(1)[m
+[31m-[m
+[31m-        # Fullscreen toggle: fills the whole screen so a chart with many[m
+[31m-        # categories is readable. Also bound to F11; Esc exits fullscreen.[m
+[31m-        self.fs_btn = QPushButton("\u26f6  Fullscreen")[m
+[31m-        self.fs_btn.setToolTip("Toggle fullscreen (F11)")[m
+[31m-        self.fs_btn.clicked.connect(self._toggle_fullscreen)[m
+[31m-        controls.addWidget(self.fs_btn)[m
+         root.addLayout(controls)[m
+ [m
+[31m-        QShortcut(QKeySequence(Qt.Key.Key_F11), self,[m
+[31m-                  activated=self._toggle_fullscreen)[m
+[31m-        QShortcut(QKeySequence(Qt.Key.Key_Escape), self,[m
+[31m-                  activated=self._exit_fullscreen)[m
+[31m-[m
+         self.fig = Figure(figsize=(6.5, 4.2))[m
+         self.canvas = FigureCanvasQTAgg(self.fig)[m
+         self.toolbar = NavigationToolbar2QT(self.canvas, self)[m
+[36m@@ -169,23 +161,6 @@[m [mclass ChartWindow(QDialog):[m
+             QToolBar {{ background: {T['panel']}; border: none; }}[m
+         """)[m
+ [m
+[31m-    # ------------------------------------------------------------------ #[m
+[31m-    def _toggle_fullscreen(self) -> None:[m
+[31m-        """Flip between fullscreen and normal. The matplotlib canvas has[m
+[31m-        stretch=1, so it grows to fill the extra space and redraws crisply."""[m
+[31m-        if self.isFullScreen():[m
+[31m-            self._exit_fullscreen()[m
+[31m-        else:[m
+[31m-            self.showFullScreen()[m
+[31m-            if hasattr(self, "fs_btn"):[m
+[31m-                self.fs_btn.setText("\u26f6  Exit fullscreen")[m
+[31m-[m
+[31m-    def _exit_fullscreen(self) -> None:[m
+[31m-        if self.isFullScreen():[m
+[31m-            self.showNormal()[m
+[31m-            if hasattr(self, "fs_btn"):[m
+[31m-                self.fs_btn.setText("\u26f6  Fullscreen")[m
+[31m-[m
+     # ------------------------------------------------------------------ #[m
+     def _spec(self) -> charting.ChartSpec:[m
+         hue = self.hue_combo.currentText()[m
+[36m@@ -206,7 +181,10 @@[m [mclass ChartWindow(QDialog):[m
+         self._stop_anim()[m
+         charting.render(self.fig, self.df, self._spec(), self.theme,[m
+                         title=self._title)[m
+[31m-        if getattr(cfg, "ANIMATIONS", True):[m
+[32m+[m[32m        # Animate only the first visible paint; every later re-plot (a control[m
+[32m+[m[32m        # change) draws instantly so the window stays steady.[m
+[32m+[m[32m        if self._animate_pending and self.isVisible():[m
+[32m+[m[32m            self._animate_pending = False[m
+             self._animate_entrance()[m
+         else:[m
+             self.canvas.draw_idle()[m
+[1mdiff --git a/jarvisman/ui/charting.py b/jarvisman/ui/charting.py[m
+[1mindex 8d2fbb71..608268d9 100755[m
+[1m--- a/jarvisman/ui/charting.py[m
+[1m+++ b/jarvisman/ui/charting.py[m
+[36m@@ -18,9 +18,36 @@[m [mDEFAULT_THEME = {[m
+     "muted": "#5b6b81", "grid": "#d5e0ee", "accent": "#0f5aa8",[m
+     "cycle": ["#0f5aa8", "#2e7d4f", "#b7791f", "#c0563f", "#7a5cae",[m
+               "#2f8f9e", "#c1567f", "#5b6b81", "#3f7fd1", "#8f7a3f"],[m
+[32m+[m[32m    "ramp": ["#79aee0", "#0b3f78"],[m
+ }[m
+ [m
+ [m
+[32m+[m[32m# --------------------------------------------------------------------------- #[m
+[32m+[m[32m# Theme-aligned colours                                                       #[m
+[32m+[m[32m# --------------------------------------------------------------------------- #[m
+[32m+[m[32mdef _hex_to_rgb(h: str) -> tuple:[m
+[32m+[m[32m    h = h.lstrip("#")[m
+[32m+[m[32m    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _rgb_to_hex(rgb) -> str:[m
+[32m+[m[32m    return "#%02x%02x%02x" % tuple(max(0, min(255, int(round(c)))) for c in rgb)[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef series_colors(theme: dict, n: int) -> list:[m
+[32m+[m[32m    """n colours sampled across the theme's sequential ramp (light -> deep), so[m
+[32m+[m[32m    a single-series bar chart or a pie reads as one coherent theme hue (blue for[m
+[32m+[m[32m    Dark/Light) with each bar/slice a distinct shade -- instead of the multi-hue[m
+[32m+[m[32m    ``cycle``, which is reserved for charts with several series to tell apart."""[m
+[32m+[m[32m    lo, hi = (theme.get("ramp") or DEFAULT_THEME["ramp"])[:2][m
+[32m+[m[32m    a, b = _hex_to_rgb(lo), _hex_to_rgb(hi)[m
+[32m+[m[32m    if n <= 1:[m
+[32m+[m[32m        return [hi][m
+[32m+[m[32m    return [_rgb_to_hex(tuple(a[k] + (b[k] - a[k]) * (i / (n - 1))[m
+[32m+[m[32m                              for k in range(3)))[m
+[32m+[m[32m            for i in range(n)][m
+[32m+[m
+[32m+[m
+ # --------------------------------------------------------------------------- #[m
+ # Data preparation                                                           #[m
+ # --------------------------------------------------------------------------- #[m
+[36m@@ -153,7 +180,7 @@[m [mdef render(fig, df: pd.DataFrame, spec: ChartSpec,[m
+            theme: Optional[dict] = None, title: str = "") -> None:[m
+     """Draw spec over df onto fig (cleared first). Never raises -- on bad input[m
+     it draws a short message instead."""[m
+[31m-    theme = theme or DEFAULT_THEME[m
+[32m+[m[32m    theme = {**DEFAULT_THEME, **(theme or {})}[m
+     fig.clear()[m
+     ax = fig.add_subplot(111)[m
+     apply_theme(fig, ax, theme)[m
+[36m@@ -186,7 +213,8 @@[m [mdef _render_inner(fig, ax, df, spec, theme, title):[m
+         vals = frame[ys[0]].clip(lower=0)[m
+         wedges, _txt, _aut = ax.pie([m
+             vals, labels=[str(v) for v in frame[spec.x]],[m
+[31m-            autopct=lambda p: f"{p:.0f}%", colors=cycle,[m
+[32m+[m[32m            autopct=lambda p: f"{p:.0f}%",[m
+[32m+[m[32m            colors=series_colors(theme, len(vals)),[m
+             textprops={"color": theme["text"], "fontsize": 9})[m
+         ax.set_title(title or f"{ys[0]} by {spec.x}")[m
+         ax.axis("equal")[m
+[36m@@ -194,7 +222,8 @@[m [mdef _render_inner(fig, ax, df, spec, theme, title):[m
+ [m
+     # ---- scatter ---------------------------------------------------------- #[m
+     if ct == "scatter" and len(ys) >= 1 and spec.x and spec.x in nums:[m
+[31m-        ax.scatter(df[spec.x], df[ys[0]], color=cycle[0], alpha=0.8, s=28)[m
+[32m+[m[32m        ax.scatter(df[spec.x], df[ys[0]], color=theme.get("accent", cycle[0]),[m
+[32m+[m[32m                   alpha=0.8, s=28)[m
+         ax.set_xlabel(spec.x); ax.set_ylabel(ys[0])[m
+         ax.set_title(title or f"{ys[0]} vs {spec.x}")[m
+         return[m
+[36m@@ -235,11 +264,21 @@[m [mdef _render_inner(fig, ax, df, spec, theme, title):[m
+ [m
+ [m
+ def _plot_frame(ax, frame, ct, cycle, theme, spec, stacked=False):[m
+[31m-    """Plot a (possibly multi-column) frame as bars/lines/area."""[m
+[32m+[m[32m    """Plot a (possibly multi-column) frame as bars/lines/area.[m
+[32m+[m
+[32m+[m[32m    One series -> the theme ramp (each bar a distinct shade of the theme hue;[m
+[32m+[m[32m    line/area in the accent), so the chart reads as one coherent colour. Several[m
+[32m+[m[32m    series -> the multi-hue ``cycle`` so they stay tellable apart in the legend.[m
+[32m+[m[32m    """[m
+     cols = list(frame.columns)[m
+[31m-    colors = [cycle[i % len(cycle)] for i in range(len(cols))][m
+[32m+[m[32m    single = len(cols) == 1[m
+[32m+[m[32m    accent = theme.get("accent", cycle[0])[m
+[32m+[m[32m    colors = [accent] if single else [cycle[i % len(cycle)][m
+[32m+[m[32m                                      for i in range(len(cols))][m
+     if ct == "barh":[m
+         frame.plot.barh(ax=ax, color=colors, legend=len(cols) > 1, width=0.8)[m
+[32m+[m[32m        if single:[m
+[32m+[m[32m            _shade_bars(ax, theme)[m
+         if spec.value_labels and len(cols) == 1:[m
+             _label_bars(ax, ax.patches, theme, horizontal=True)[m
+     elif ct in ("line", "area"):[m
+[36m@@ -253,6 +292,8 @@[m [mdef _plot_frame(ax, frame, ct, cycle, theme, spec, stacked=False):[m
+     else:  # bar (vertical)[m
+         frame.plot.bar(ax=ax, color=colors, legend=len(cols) > 1, width=0.8,[m
+                        stacked=stacked)[m
+[32m+[m[32m        if single:[m
+[32m+[m[32m            _shade_bars(ax, theme)[m
+         ax.tick_params(axis="x", rotation=30)[m
+         if spec.value_labels and len(cols) == 1:[m
+             _label_bars(ax, ax.patches, theme, horizontal=False)[m
+[36m@@ -262,3 +303,14 @@[m [mdef _plot_frame(ax, frame, ct, cycle, theme, spec, stacked=False):[m
+         leg.get_frame().set_edgecolor(theme["grid"])[m
+         for t in leg.get_texts():[m
+             t.set_color(theme["text"])[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _shade_bars(ax, theme) -> None:[m
+[32m+[m[32m    """Recolour a single-series bar plot's bars across the theme ramp, so each[m
+[32m+[m[32m    bar is a distinct on-theme shade. Done on the patches after pandas plots,[m
+[32m+[m[32m    because pandas colours per-column (one colour for a single series)."""[m
+[32m+[m[32m    from matplotlib.patches import Rectangle[m
+[32m+[m[32m    bars = [p for p in ax.patches if isinstance(p, Rectangle)][m
+[32m+[m[32m    shades = series_colors(theme, len(bars))[m
+[32m+[m[32m    for patch, col in zip(bars, shades):[m
+[32m+[m[32m        patch.set_facecolor(col)[m
+\ No newline at end of file[m
+[1mdiff --git a/jarvisman/ui/gui.py b/jarvisman/ui/gui.py[m
+[1mindex ccbb4690..479efed3 100755[m
+[1m--- a/jarvisman/ui/gui.py[m
+[1m+++ b/jarvisman/ui/gui.py[m
+[36m@@ -1348,6 +1348,12 @@[m [mclass MainWindow(QMainWindow):[m
+         self._system_line([m
+             f"Loaded saved index ({self.store.count} text chunk(s), "[m
+             f"{n_tables} table(s) restored).", THEME["muted"])[m
+[32m+[m[32m        if getattr(self.rag, "index_stale", False):[m
+[32m+[m[32m            self._system_line([m
+[32m+[m[32m                "\u26a0 This index was built by an older data-parsing version, "[m
+[32m+[m[32m                f"so recent parsing fixes aren't applied to it. Re-index your "[m
+[32m+[m[32m                f"source files (or run 'python -m jarvisman.cli reindex') to "[m
+[32m+[m[32m                f"apply them.", THEME.get("warn", "#fbbf24"))[m
+         self._refresh_workspace()[m
+ [m
+     def _new_chat(self) -> None:[m
+[1mdiff --git a/jarvisman/ui/theme_manager.py b/jarvisman/ui/theme_manager.py[m
+[1mindex 683f738a..59d98135 100755[m
+[1m--- a/jarvisman/ui/theme_manager.py[m
+[1m+++ b/jarvisman/ui/theme_manager.py[m
+[36m@@ -46,6 +46,10 @@[m [mclass ThemeManager:[m
+         "sel_text": "#ffffff",[m
+         "cycle": ["#3d8bfd", "#22c55e", "#eab308", "#a855f7", "#ec4899",[m
+                   "#14b8a6", "#f97316", "#64748b", "#60a5fa", "#84cc16"],[m
+[32m+[m[32m        # sequential same-hue ramp (light -> deep) for single-series bars and[m
+[32m+[m[32m        # pies, so one chart reads as one coherent theme colour instead of a[m
+[32m+[m[32m        # rainbow. Dark/Light are blue; Emerald green; Purple violet.[m
+[32m+[m[32m        "ramp": ["#9ec5ff", "#1c4fb0"],[m
+     }[m
+ [m
+     LIGHT_THEME = {[m
+[36m@@ -73,6 +77,7 @@[m [mclass ThemeManager:[m
+         "sel_text": "#ffffff",[m
+         "cycle": ["#0f5aa8", "#2e7d4f", "#b7791f", "#c0563f", "#7a5cae",[m
+                   "#2f8f9e", "#c1567f", "#5b6b81", "#3f7fd1", "#8f7a3f"],[m
+[32m+[m[32m        "ramp": ["#79aee0", "#0b3f78"],[m
+     }[m
+ [m
+     EMERALD_THEME = {[m
+[36m@@ -99,6 +104,7 @@[m [mclass ThemeManager:[m
+         "sel_text": "#ffffff",[m
+         "cycle": ["#10b981", "#34d399", "#a3e635", "#2dd4bf", "#4ade80",[m
+                   "#facc15", "#38bdf8", "#86efac", "#5eead4", "#bef264"],[m
+[32m+[m[32m        "ramp": ["#7ee7c1", "#0a7f5c"],[m
+     }[m
+ [m
+     PURPLE_THEME = {[m
+[36m@@ -124,6 +130,7 @@[m [mclass ThemeManager:[m
+         "sel_text": "#ffffff",[m
+         "cycle": ["#a78bfa", "#ec4899", "#38bdf8", "#f472b6", "#c084fc",[m
+                   "#e879f9", "#818cf8", "#fb7185", "#d8b4fe", "#f0abfc"],[m
+[32m+[m[32m        "ramp": ["#d3c4fb", "#6b46c1"],[m
+     }[m
+ [m
+     THEMES = {[m
+[1mdiff --git a/requirements-gui.txt b/requirements-gui.txt[m
+[1mindex 241ce876..1f4f73af 100644[m
+[1m--- a/requirements-gui.txt[m
+[1m+++ b/requirements-gui.txt[m
+[36m@@ -1,5 +1,4 @@[m
+ # Desktop GUI only. Install on the workstation that runs app.py:[m
+ #     pip install -r requirements.txt -r requirements-gui.txt[m
+[31m-# The Docker images do NOT install this -- the backend is headless.[m
+ -r requirements.txt[m
+ PyQt6>=6.5,<7[m
+[1mdiff --git a/requirements.txt b/requirements.txt[m
+[1mindex 908c117f..8f8d5f6b 100755[m
+[1m--- a/requirements.txt[m
+[1m+++ b/requirements.txt[m
+[36m@@ -1,15 +1,9 @@[m
+[31m-# Core runtime -- everything the CLI and the API server need.[m
+[31m-# The GUI's extra dependency lives in requirements-gui.txt so the backend[m
+[31m-# image never installs Qt.[m
+[31m-#[m
+[31m-# Upper bounds pin the major version: patch/minor upgrades still come in on a[m
+[31m-# rebuild, but a breaking 3.x pandas cannot silently land in a production[m
+[31m-# image months from now.[m
+[32m+[m[32m# Core runtime -- CLI and API server. No Qt: the backend is headless.[m
+ faiss-cpu>=1.7.4,<2         # vector similarity search (CPU build)[m
+ PyMuPDF>=1.23.0,<2          # PDF text extraction (imported as `fitz`)[m
+[31m-pandas>=3.0,<4            # Excel ingestion + DataFrame handling[m
+[32m+[m[32mpandas>=3.0,<4              # Excel ingestion + DataFrame handling[m
+ openpyxl>=3.1.0,<4          # .xlsx engine used by pandas.read_excel[m
+ python-calamine>=0.2.0,<1   # faster Rust .xlsx reader; ingestion prefers it[m
+ matplotlib>=3.7.0,<4        # plotting (Agg backend inside the sandbox)[m
+ numpy>=1.24.0,<3            # arrays / embedding matrices[m
+[31m-requests>=2.31.0,<3         # talks to the local Ollama HTTP API[m
+\ No newline at end of file[m
+[32m+[m[32mrequests>=2.31.0,<3         # talks to the local Ollama HTTP API[m

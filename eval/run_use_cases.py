@@ -120,9 +120,64 @@ def check_cy05(path) -> list:
     return out
 
 
+def check_wcr(path) -> list:
+    """Use cases 9-10, verified against WCR_27_12_2023.xlsx."""
+    df = _load_one(path)
+    out = []
+    bg = df[df["Company"].astype(str).str.contains("Bulgaria Eood", case=False, na=False)]
+    av = _num(bg["Available Facility 000"]).round(0)
+    ok = {29337.0, 838.0, 28499.0} <= set(av.dropna())
+    out.append(("9.1 Bulgaria facilities '000 (29,337 / 838 / 28,499)", ok,
+                f"available'000={sorted(av.dropna().unique())}"))
+
+    teur = _num(bg["Total Funds Available TEUR"]).dropna()
+    ok = _close(teur.iloc[0] if len(teur) else None, 18455.84, 1.0)
+    out.append(("10.1 Bulgaria total funds available TEUR (18,456)", ok,
+                f"{teur.iloc[0]:,.2f}" if len(teur) else "missing"))
+
+    dk = df[df["Company Country"].astype(str).str.strip() == "Denmark"]
+    ut = _num(dk["Utilised Facility 000"]).round(0)
+    ok = len(dk) == 5 and 3187.0 in set(ut.dropna())
+    out.append(("9.2 Denmark rows (5 lines, utilised 3,187 DKK)", ok,
+                f"rows={len(dk)}, utilised'000={sorted(ut.dropna().unique())}"))
+    return out
+
+
+def check_ltl(path) -> list:
+    """Use case 11, verified against LTL_Data.xlsx (see Demo Data PDF; the
+    PDF total '31,499,9125.50' is a typo for 31,499,912.50)."""
+    df = _load_one(path)
+    out = []
+    lender_col = next((c for c in df.columns if "LENDER" in str(c).upper()
+                       and "CASEWHEN" in str(c).upper()), None)
+    cr = df[(df["NAME"].astype(str).str.strip() == "Kronospan CR, spol s r.o.")
+            & (df["FACILITYGROUPING"].astype(str) == "3rd Party")]
+    snap = cr[pd.to_datetime(cr["CALC_DATE"], errors="coerce") == "2025-12-31"]
+    total = _num(snap["OUTSTANDING_BCE"]).sum()
+    out.append(("11.1 CR 3rd-party outstanding @31/12/2025 (31,499,912.50)",
+                _close(total, 31499912.50, 1.0), f"{total:,.2f}"))
+    if lender_col is not None and len(snap):
+        per = snap.groupby(lender_col)["OUTSTANDING_BCE"].sum()
+        ok = (_close(per.get("KBC Group"), 10499970.87, 1.0)
+              and _close(per.get("Erste Group"), 10499970.82, 1.0)
+              and _close(per.get("Societe Generale Group"), 10499970.82, 1.0))
+        out.append(("11.1.2 split KBC/Erste/SocGen", ok,
+                    ", ".join(f"{k}={v:,.2f}" for k, v in per.items())))
+    undrawn = _num(snap["TOBEDRAWN"]).sum()
+    out.append(("11.1.3 undrawn = 0", _close(undrawn, 0.0, 0.01),
+                f"{undrawn:,.2f}"))
+    ends = set(pd.to_datetime(cr["END_DATE"], errors="coerce").dropna()
+               .dt.strftime("%Y-%m-%d"))
+    out.append(("11.2 end date 30/09/2027", ends == {"2027-09-30"},
+                f"{sorted(ends)}"))
+    return out
+
+
 CASES = [
     ("CY01-DDR (funds)", ("CY01-DDR*DATA*.xlsx", "CY01*DATA*.xlsx"), check_cy01),
     ("CY05 (directorships/address)", ("CY05*DATA*.xlsx", "CY05*Group*Company*.xlsx"), check_cy05),
+    ("WCR (working capital, 27/12/2023 snapshot)", ("WCR_27_12_2023.xlsx",), check_wcr),
+    ("LTL (long-term loans)", ("LTL_Data*.xlsx", "LTL*DATA*.xlsx"), check_ltl),
 ]
 
 
@@ -147,6 +202,13 @@ def run(data_dir: str) -> int:
             print(f"{'PASS' if ok else 'FAIL'}  {name}\n        -> {detail}")
     print("-" * 68)
     print(f"{passed}/{total} checks passed, {skipped} case group(s) skipped")
+    try:
+        from jarvisman.runtime import scoreboard
+        scoreboard.record("data_checks", {"passed": int(passed),
+                                          "total": int(total),
+                                          "skipped": int(skipped)})
+    except Exception:
+        pass
     return 0 if passed == total and total > 0 else 1
 
 

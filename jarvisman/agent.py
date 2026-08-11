@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import difflib
@@ -14,10 +12,14 @@ from jarvisman.llm.llm_json import extract_json as _extract_json_shared
 from jarvisman.llm.ollama_client import OllamaClient
 from jarvisman.retrieval.rag import RAGPipeline
 from jarvisman.planning.reasoner import TableReasoner
+from jarvisman.planning import code_resolver
+from jarvisman.planning import continuity
 from jarvisman.retrieval.retrieval import tokenize
 from jarvisman.runtime.sandbox import run_query, run_sandboxed
 from jarvisman.semantics.semantic_model import build_semantic_model, load_semantic_model
 from jarvisman.semantics.value_index import ValueIndex
+from jarvisman.runtime import timing
+timing.reset()
 
 def _yes_label() -> str:
     return "Ναι, κάνε το" if getattr(cfg, "UI_LANG", "en") == "el" else "Yes, do that"
@@ -92,7 +94,34 @@ def _sanitize_code(code: str) -> str:
             # a bare read call with no assignment is simply dropped
             continue
         kept.append(ln)
-    return "\n".join(kept)
+    out = "\n".join(kept)
+    return _salvage_trailing_prose(out)
+
+
+def _salvage_trailing_prose(code: str) -> str:
+    """Models sometimes append an explanation after the code (e.g. 'This returns
+    the total...'), which lands inside the block and makes it unparseable partway
+    down. If the code doesn't parse, drop trailing lines one at a time until it
+    does -- but never discard a line that assigns `result`, so the answer is
+    preserved. If trimming can't produce valid code, return it unchanged and let
+    the normal syntax-error path handle it."""
+    try:
+        ast.parse(code)
+        return code
+    except SyntaxError:
+        pass
+    lines = code.splitlines()
+    for cut in range(len(lines) - 1, 0, -1):
+        tail = "\n".join(lines[cut:])
+        if re.search(r"(?m)^\s*result\s*=", tail):
+            break                      # would throw away the answer -> stop
+        head = "\n".join(lines[:cut])
+        try:
+            ast.parse(head)
+            return head
+        except SyntaxError:
+            continue
+    return code
 
 
 def _norm_map(tables: dict) -> dict:
@@ -177,6 +206,9 @@ class Agent:
         # chat path has continuity like a normal chatbot.
         self.history: list = []          # [{"q":..., "answer":..., "tool":...}]
         self.max_history_turns = 12
+        self._last_company: str = ""      # last company asked about (continuity)
+        self._last_analysis_q: str = ""   # last data question (for follow-ups)
+        self._last_answer_text: str = ""  # last answer text (for 're-explain')
 
     # ------------------------------------------------------------------ #
     # Tables + semantic layer                                            #
@@ -329,7 +361,17 @@ class Agent:
         scored: list[tuple[float, str]] = []
         for name, df in self.dataframes.items():
             col_tokens = set(tokenize(" ".join(str(c) for c in df.columns)))
+            # Table NAME tokens matter too: 'LTL', 'CY01', 'deposit report'
+            # live in the file/sheet name, not in any column. Without this a
+            # question that names the table by its code scores 0 for it.
+            name_tokens = {t for t in tokenize(str(name)) if len(t) >= 2}
             score = 0.0
+            for qt in q:                                   # STRONG: named table
+                for nt in name_tokens:
+                    if qt == nt or (len(qt) >= 3 and len(nt) >= 3
+                                    and (qt in nt or nt in qt)):
+                        score += 2.0
+                        break
             for qt in q:                                   # PRIMARY: column fit
                 for ct in col_tokens:
                     if qt == ct or (len(qt) >= 3 and len(ct) >= 3 and (qt in ct or ct in qt)):
@@ -453,6 +495,24 @@ class Agent:
                     return True
         return False
 
+    # generic words that appear in table names but carry no routing signal
+    _NAME_NOISE = {"data", "sheet", "sheet1", "sheet2", "table", "xlsx", "xls",
+                   "file", "final", "new", "copy", "main", "the", "and"}
+
+    def _mentions_known_table(self, ql: str) -> bool:
+        """True when the question names a loaded TABLE (by code or by a word
+        of its file/sheet name): 'the LTL balances', 'in CY01', 'the daily
+        deposit report'. Such questions are tabular even when they also
+        contain doc-sounding words like 'report'."""
+        q_tokens = set(tokenize(ql))
+        for name in self.dataframes:
+            for t in tokenize(str(name)):
+                if len(t) < 3 or t in self._NAME_NOISE:
+                    continue
+                if t in q_tokens or (len(t) >= 4 and t in ql):
+                    return True
+        return False
+
     # ------------------------------------------------------------------ #
     # Routing (cascade: heuristic first, LLM only when unsure)            #
     # ------------------------------------------------------------------ #
@@ -497,9 +557,12 @@ class Agent:
             return "plot"
 
         if has_index and any(s in ql for s in _DOC_SIGNALS) \
-                and not self._mentions_known_column(ql):
+                and not self._mentions_known_column(ql) \
+                and not (has_tables and self._mentions_known_table(ql)):
             # 'what does the report say about X' is a prose question even when
-            # it contains words like 'total' -- unless a table column is named
+            # it contains words like 'total' -- unless a table column OR a
+            # loaded table itself is named ('the LTL report', 'the daily
+            # deposit report' are tabular questions, not PDF ones).
             return "answer_docs"
 
         # Strong data signal -> analyze (this runs BEFORE the conversational
@@ -508,6 +571,7 @@ class Agent:
             any(h in ql for h in _ANALYZE_HINTS)
             or any(h in ql for h in _LOOKUP_HINTS)
             or self._mentions_known_column(ql)
+            or self._mentions_known_table(ql)
         ):
             return "analyze"
 
@@ -577,7 +641,20 @@ class Agent:
     # ------------------------------------------------------------------ #
     def handle(self, query: str, *args, **kwargs):
 
-        res = self._handle_inner(query, *args, **kwargs)
+        try:
+            res = self._handle_inner(query, *args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            # A question the pipeline cannot serve must not reach the user as a
+            # raw traceback. The full detail is written to an error log, so
+            # nothing is lost for debugging -- only the presentation changes.
+            self._log_error(query, exc)
+            return self._text_result(
+                "I hit an internal error working on that one, so I have no "
+                "answer I'd trust enough to show you. Try asking it a "
+                "different way -- naming the sheet or the column usually "
+                "helps.\n\n"
+                f"(Technical detail for the log: {type(exc).__name__})",
+                streamed=False)
         try:
             opts = res.get("options") or []
             if opts:
@@ -596,6 +673,23 @@ class Agent:
             pass
         return res
 
+    @staticmethod
+    def _log_error(query: str, exc: BaseException) -> None:
+        """Append a failed turn to errors.log. Never raises -- a logging
+        problem must not replace the error the user already hit."""
+        import datetime as _dt
+        import os as _os
+        import traceback as _tb
+        try:
+            d = _os.path.join(cfg.DATA_DIR, "audit")
+            _os.makedirs(d, exist_ok=True)
+            with open(_os.path.join(d, "errors.log"), "a",
+                      encoding="utf-8") as fh:
+                fh.write(f"\n=== {_dt.datetime.now():%Y-%m-%d %H:%M:%S} ===\n"
+                         f"question: {query}\n{_tb.format_exc()}")
+        except Exception:
+            pass
+    
     def _record_turn(self, query: str, res: dict) -> None:
         """Store a compact summary of this turn so later questions can refer
         back to it. We keep the question plus a short text rendering of the
@@ -611,6 +705,21 @@ class Agent:
         answer = answer[:600]
         self.history.append({"q": query, "answer": answer,
                              "tool": res.get("tool")})
+        if res.get("tool") == "analyze":
+            self._last_analysis_q = query
+            self._last_answer_text = answer
+            # Learn the conversational subject from the plan that actually
+            # ran. Previously _last_company was only ever set as a side effect
+            # of code->name resolution, so a question that named the company
+            # directly ("total for Acme Bank") left it empty and every
+            # follow-up afterwards silently failed to carry over.
+            try:
+                subj = continuity.subject_from_plan(
+                    getattr(self.reasoner, "last_plan", None))
+                if subj:
+                    self._last_company = subj
+            except Exception:
+                pass
         if len(self.history) > self.max_history_turns:
             self.history = self.history[-self.max_history_turns:]
 
@@ -628,7 +737,18 @@ class Agent:
         return "\n".join(lines)
 
     def clear_history(self) -> None:
+        """Start a genuinely fresh conversation. Clearing only ``history`` left
+        the remembered subject and last answer alive, so 'New conversation'
+        could still answer a follow-up with the previous session's company."""
         self.history = []
+        self._last_company = ""
+        self._last_analysis_q = ""
+        self._last_answer_text = ""
+        self._recent_option_labels = []
+        try:
+            self.reasoner.last_plan = None
+        except Exception:
+            pass
 
     def _handle_inner(
         self,
@@ -641,6 +761,17 @@ class Agent:
         if self.dataframes and self.reasoner.pending_clarify:
             forced = self.reasoner.consume_option(query)
             if forced is not None:
+                if forced.get("unmatched"):
+                    # A pending clarification is open and this message is not
+                    # one of its options. Never route it to the planner: a chip
+                    # label is not a question, and answering it produces a real
+                    # figure for the wrong thing.
+                    result = self._text_result(
+                        "I still need to know which reading you meant -- "
+                        "please pick one of the options above, or rephrase "
+                        "the question if neither fits.", streamed=False)
+                    result["tool"] = "chat"
+                    return result
                 if forced.get("declined"):
                     result = self._text_result(
                         "No problem -- I won't make that assumption. "
@@ -663,6 +794,49 @@ class Agent:
             return self._text_result(
                 "That choice belongs to an earlier question and has expired "
                 "-- please ask the question again.", streamed=False)
+
+        # ---- Conversation continuity -------------------------------------
+        # (0) "remove the last row" -> the plan schema cannot express positional
+        #     row removal, so this used to fall through to raw codegen and fail
+        #     unpredictably. Answer it honestly instead of improvising.
+        if continuity.is_positional_row_edit(query):
+            result = self._text_result(
+                continuity.positional_row_edit_reply(self._last_analysis_q),
+                streamed=False)
+            result["tool"] = "chat"
+            return result
+        # (a) "are you sure / is that right" -> re-explain the LAST answer,
+        #     never recompute (a doubt-prompt must not change a correct figure).
+        if self._last_answer_text and continuity.is_reexplain(query):
+            try:
+                prompt = continuity.reexplain_prompt(self._last_analysis_q,
+                                                     self._last_answer_text)
+                out = self.ollama.chat(
+                    cfg.model_for("synthesize", self.chat_model),
+                    [{"role": "user", "content": prompt}],
+                    options={"temperature": 0.0, "num_predict": 320}).strip()
+                if out:
+                    result = self._text_result(out, streamed=False)
+                    result["tool"] = "chat"
+                    return result
+            except Exception:
+                pass
+        # (b) implicit follow-up ("what about this?") -> carry the last company
+        if self._last_company and continuity.wants_carryover(query, self._last_company):
+            expanded = continuity.expand_followup(query, self._last_analysis_q,
+                                                  self._last_company)
+            if expanded and expanded != query:
+                if progress_callback:
+                    progress_callback(f"Continuing with {self._last_company} ...")
+                result = self._run_analysis(expanded, progress_callback)
+                # make the carried-over subject VISIBLE, never silent.
+                # _run_analysis returns a dict; guard defensively regardless.
+                if isinstance(result, dict):
+                    if result.get("text"):
+                        result["text"] = (f"(For {self._last_company})\n\n"
+                                          + result["text"])
+                    result["tool"] = "analyze"
+                return result
 
         decision: Optional[dict] = None
         tool = self._route_fast(query)
@@ -1036,8 +1210,10 @@ class Agent:
         # "total: 0.00 eur" style
         if re.fullmatch(r"(total|sum|result)?:?\s*0(\.0+)?\s*[a-z]{0,4}", blob):
             return True
-        # An empty DataFrame string representation.
+        # An empty DataFrame string representation, or the friendly no-rows line.
         if "empty dataframe" in blob or "columns: []" in blob:
+            return True
+        if "no matching rows" in blob:
             return True
         return False
 
@@ -1087,6 +1263,24 @@ class Agent:
                       forced_bind: Optional[dict] = None, bind_term: str = "",
                       directive: str = "",
                       constraint: Optional[dict] = None) -> dict:
+        # Company CODE -> NAME resolution, done ONCE here so BOTH the plan tier
+        # and the codegen fallback see the rewritten query. (A rewrite inside
+        # the reasoner would not reach codegen, which reads this `query`.)
+        try:
+            new_q, _rnotes, _clarify = code_resolver.resolve_in_question(
+                query, self.dataframes)
+            if _clarify:
+                return self._text_result(_clarify, streamed=False)
+            if new_q != query:
+                if progress_callback:
+                    progress_callback("Resolved company code to name ...")
+                query = new_q
+            for _n in (_rnotes or []):
+                _m = _n.split("to '", 1)
+                if len(_m) == 2:
+                    self._last_company = _m[1].rstrip("'")
+        except Exception:
+            pass
         # Tier 1: structured plan over the semantic model -- grounded against
         # the actual cell values, validated and compiled BEFORE execution.
         evidence_block = ""
@@ -1186,6 +1380,24 @@ class Agent:
                     continue
                 break
             raw_err = result.get("error") or ""
+            # A syntax error (or a bare "did not return runnable code") won't be
+            # helped by column or spelling repair -- the code never parsed. Give
+            # the model the exact failure and demand a clean, prose-free block,
+            # which is what it actually needs to correct itself.
+            if ("syntax error" in raw_err.lower()
+                    or "did not return runnable code" in raw_err.lower()) \
+                    and attempt < attempts - 1:
+                error = (
+                    f"Your previous response was NOT valid Python and could not "
+                    f"be parsed ({raw_err}). Return ONLY a single Python code "
+                    "block that parses cleanly on its own: no sentences or "
+                    "explanation before or after the code, nothing outside the "
+                    "```python fence, no unfinished lines and no unbalanced "
+                    "brackets or quotes. Use the provided `df`/`dfs` and assign "
+                    "the final answer to `result`."
+                )
+                prev_code = code or prev_code
+                continue
             # deterministic spelling rescue on the ERROR path too: a wrong
             # free-typed literal ('Koutouvas Athanasios') may sit alongside a
             # fixable error; rewriting it to the stored value and re-running

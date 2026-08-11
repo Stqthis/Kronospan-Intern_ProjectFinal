@@ -576,12 +576,21 @@ def content_route(question, model, max_n: int = 3) -> list:
     months = ("jan", "feb", "mar", "apr", "may", "jun",
               "jul", "aug", "sep", "oct", "nov", "dec")
     q_months = {i + 1 for i, mo in enumerate(months) if mo in ql}
+    # words of the question, for matching against table NAMES ('LTL', 'CY01',
+    # 'deposit') -- a user who names the file/table must be routed to it even
+    # when no date or cell value matches.
+    q_words = set(re.findall(r"[a-z0-9]+", ql))
+    _noise = {"data", "sheet", "sheet1", "table", "xlsx", "xls", "file",
+              "the", "and", "all", "for"}
     scored = []
     for name in model.table_names():
         t = model.tables.get(name)
         if t is None:
             continue
         s = 0.0
+        for nt in set(re.findall(r"[a-z0-9]+", str(name).lower())):
+            if len(nt) >= 3 and nt not in _noise and nt in q_words:
+                s += 2.0
         for c in t.columns:
             if c.role in ("date", "year") and c.vmin is not None:
                 span = f"{c.vmin} {c.vmax}".lower()

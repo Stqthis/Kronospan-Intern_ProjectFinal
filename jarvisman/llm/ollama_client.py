@@ -8,6 +8,9 @@ import requests
 
 from jarvisman import config as cfg
 
+import time as _t
+
+
 
 def _ka(value):
     """Normalize keep_alive: the string "-1" -> int -1 so Ollama reads it as
@@ -73,6 +76,10 @@ class OllamaClient:
         delivered to the callback as they arrive (so the GUI can render
         progressively); the complete text is still returned.
         """
+        import time as _t
+        from jarvisman.runtime import timing as _timing
+        _t0 = _t.monotonic()
+        # Always send an explicit context window: Ollama's default num_ctx is
         # Always send an explicit context window: Ollama's default num_ctx is
         # tiny and it silently truncates longer prompts from the FRONT, which
         # destroys schema-heavy prompts. Callers can still override num_ctx.
@@ -125,6 +132,7 @@ class OllamaClient:
             except requests.RequestException as exc:
                 raise OllamaError(self._chat_hint(exc, model)) from exc
             data = r.json()
+            _timing.record(_t.monotonic() - _t0, model)
             return (data.get("message") or {}).get("content", "")
 
         # Streaming: Ollama returns newline-delimited JSON objects.
@@ -148,6 +156,7 @@ class OllamaClient:
                         break
         except requests.RequestException as exc:
             raise OllamaError(self._chat_hint(exc, model)) from exc
+        _timing.record(_t.monotonic() - _t0, model)
         return "".join(parts)
 
     # ------------------------------------------------------------------ #

@@ -14,8 +14,9 @@ from PyQt6.QtWidgets import (
     QLabel,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
 from matplotlib.backends.backend_qtagg import (
     FigureCanvasQTAgg,
     NavigationToolbar2QT,
@@ -34,15 +35,40 @@ class ChartWindow(QDialog):
                  theme: Optional[dict] = None, parent=None) -> None:
         super().__init__(parent)
         self.df = df if df is not None else pd.DataFrame()
-        self.theme = theme or charting.DEFAULT_THEME
+        # Merge over the default so any missing key (a caller passing a partial
+        # palette) can never raise mid-draw and blank the chart.
+        self.theme = {**charting.DEFAULT_THEME, **(theme or {})}
         self._title = title or "Chart"
         self.setWindowTitle(("Chart \u2014 " + self._title)[:90])
+        # A QDialog defaults to a close button only. Ask for the min/max hints
+        # so it behaves like a normal application window: the titlebar maximize
+        # (the rectangle at top-right) and double-click-titlebar both work, and
+        # there is no separate in-app fullscreen button to get out of sync.
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint)
         self.resize(860, 580)
         self._annot = None
         self._anim = None
         self._anim_token = 0
+        self._shown_once = False
+        # Animate the chart in ONCE, on first show -- not on every control
+        # change. Re-running the grow/sweep each time a combo changed made the
+        # window feel unstable; now switching type/measure redraws instantly.
+        self._animate_pending = getattr(cfg, "ANIMATIONS", True)
         self._build()
         self._replot()
+
+    def showEvent(self, ev):                              # noqa: N802
+        """Replay the entrance animation on first show. The window is built
+        (and first rendered) while still hidden, so the one-shot animation is
+        armed here, once the canvas is actually visible."""
+        super().showEvent(ev)
+        if not self._shown_once:
+            self._shown_once = True
+            if self._animate_pending:
+                QTimer.singleShot(50, self._replot)
 
     # ------------------------------------------------------------------ #
     @classmethod
@@ -56,14 +82,32 @@ class ChartWindow(QDialog):
     def _build(self) -> None:
         cats, nums = charting.infer_roles(self.df)
         cols = [str(c) for c in self.df.columns]
-        spec = charting.default_spec(self.df, top_n=cfg.CHART_TOP_N,
+        # Default to showing EVERY category (0 = all). The user can still cap
+        # to the top-N by typing a number into the "Top" spinbox below.
+        spec = charting.default_spec(self.df, top_n=0,
                                      value_labels=cfg.CHART_VALUE_LABELS)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        controls = QHBoxLayout()
+        # Plain-language banner: tell the user exactly what the chart shows, so
+        # they never have to reason about axes. Auto-picked; controls are hidden
+        # until they choose to customize.
+        self._spec_default = spec
+        self.desc_label = QLabel(charting.describe_spec(spec))
+        self.desc_label.setWordWrap(True)
+        self.desc_label.setStyleSheet(
+            f"color:{self.theme['text']}; font-size:13px; font-weight:600;")
+        root.addWidget(self.desc_label)
+
+        self.customize_btn = QCheckBox("Customize chart")
+        self.customize_btn.setChecked(False)
+        root.addWidget(self.customize_btn)
+
+        self.controls_box = QWidget()
+        controls = QHBoxLayout(self.controls_box)
+        controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(8)
 
         self.type_combo = QComboBox()
@@ -84,15 +128,15 @@ class ChartWindow(QDialog):
         self.hue_combo.addItems(["(none)"] + cats)
 
         self.topn = QSpinBox()
-        self.topn.setRange(0, 1000)
-        self.topn.setValue(cfg.CHART_TOP_N)
+        self.topn.setRange(0, 100000)
+        self.topn.setValue(0)   # 0 = show all rows by default
         self.topn.setToolTip("Show the top N categories; 0 = all")
 
         self.sort_desc = QCheckBox("Sort \u2193")
         self.sort_desc.setChecked(True)
 
-        for lbl, w in (("Type", self.type_combo), ("Axis", self.x_combo),
-                       ("Measure", self.y_combo), ("Breakdown", self.hue_combo),
+        for lbl, w in (("Chart", self.type_combo), ("Labels (x)", self.x_combo),
+                       ("Values (y)", self.y_combo), ("Split by", self.hue_combo),
                        ("Top", self.topn)):
             cap = QLabel(lbl)
             cap.setStyleSheet(f"color:{self.theme['muted']}; font-size:11px;")
@@ -100,7 +144,9 @@ class ChartWindow(QDialog):
             controls.addWidget(w)
         controls.addWidget(self.sort_desc)
         controls.addStretch(1)
-        root.addLayout(controls)
+        root.addWidget(self.controls_box)
+        self.controls_box.setVisible(False)
+        self.customize_btn.toggled.connect(self.controls_box.setVisible)
 
         self.fig = Figure(figsize=(6.5, 4.2))
         self.canvas = FigureCanvasQTAgg(self.fig)
@@ -152,9 +198,15 @@ class ChartWindow(QDialog):
     def _replot(self) -> None:
         self._annot = None
         self._stop_anim()
-        charting.render(self.fig, self.df, self._spec(), self.theme,
+        spec = self._spec()
+        if getattr(self, "desc_label", None) is not None:
+            self.desc_label.setText(charting.describe_spec(spec))
+        charting.render(self.fig, self.df, spec, self.theme,
                         title=self._title)
-        if getattr(cfg, "ANIMATIONS", True):
+        # Animate only the first visible paint; every later re-plot (a control
+        # change) draws instantly so the window stays steady.
+        if self._animate_pending and self.isVisible():
+            self._animate_pending = False
             self._animate_entrance()
         else:
             self.canvas.draw_idle()
@@ -162,11 +214,14 @@ class ChartWindow(QDialog):
     def _stop_anim(self) -> None:
         try:
             if self._anim is not None:
-                self._anim.event_source.stop()
+                if hasattr(self._anim, "event_source"):
+                    self._anim.event_source.stop()
+                else:
+                    self._anim.stop()
         except Exception:
             pass
         self._anim = None
-        self._anim_token += 1   # invalidate any pending finalizer
+        self._anim_token += 1   # invalidate any pending frames
 
     def _animate_entrance(self) -> None:
         """Grow/sweep/draw the freshly-rendered chart in. Fully guarded: any
@@ -213,25 +268,26 @@ class ChartWindow(QDialog):
             frames = max(2, int(getattr(cfg, "CHART_ANIM_FRAMES", 26)))
             interval = int(getattr(cfg, "CHART_ANIM_INTERVAL_MS", 22))
             _set(0.0)
-            token = self._anim_token
-
-            def _frame(i):
-                # the final frame lands exactly on the full state
-                t = 1.0 if i >= frames - 1 else _ease((i + 1) / frames)
-                _set(t)
-                return []
-
-            self._anim = FuncAnimation(
-                self.fig, _frame, frames=frames,
-                interval=interval, blit=False, repeat=False)
             self.canvas.draw_idle()
+            token = self._anim_token
+            timer = QTimer(self)
+            self._anim = timer
+            state = {"i": 0}
 
-            def _finalize():
-                # snap to the exact final state unless a re-plot superseded us
-                if self._anim_token == token:
-                    _set(1.0)
-                    self.canvas.draw_idle()
-            QTimer.singleShot(frames * interval + 150, _finalize)
+            def _tick():
+                if self._anim_token != token:      # superseded by a re-plot
+                    timer.stop()
+                    return
+                state["i"] += 1
+                t = (1.0 if state["i"] >= frames
+                     else _ease(state["i"] / frames))
+                _set(t)
+                self.canvas.draw_idle()
+                if state["i"] >= frames:
+                    timer.stop()
+
+            timer.timeout.connect(_tick)
+            timer.start(interval)
         except Exception:
             try:
                 self.canvas.draw_idle()
@@ -248,7 +304,7 @@ class ChartWindow(QDialog):
                 self._hide_annot()
                 return
             target = None
-            for patch in ax.patches:                      # bars
+            for patch in ax.patches:
                 contains, _ = patch.contains(event)
                 if contains:
                     h, w = patch.get_height(), patch.get_width()

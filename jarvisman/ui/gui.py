@@ -39,35 +39,33 @@ from jarvisman.llm.ollama_client import OllamaClient
 from jarvisman.retrieval.rag import RAGPipeline
 from jarvisman.retrieval.vector_store import VectorStore
 from jarvisman.ui.workers import Worker
-from jarvisman.ui.response_handler import ResponseDataExtractor
-from jarvisman.ui.chart_selector import ChartTypeSelector, DataSummaryPanel
 
 # --------------------------------------------------------------------------- #
 # Theme: one palette drives the whole window via a Qt style sheet.            #
 # --------------------------------------------------------------------------- #
-# Claude-inspired warm palette: paper surfaces, ink text, and the
-# signature clay/terracotta accent. Mirrors ThemeManager.LIGHT_THEME
-# so first paint matches the default (light) theme.
+# Dark "financial terminal" palette: near-black navy surfaces, soft slate
+# text and an electric-blue accent. Mirrors ThemeManager.DARK_THEME so the
+# first paint matches the default (dark) theme.
 THEME = {
-        "bg": "#f5f8fc",
-        "panel": "#ffffff",
-        "panel2": "#e9f0f8",
-        "border": "#d5e0ee",
-        "text": "#16273c",
-        "muted": "#5b6b81",
-        "accent": "#0f5aa8",
-        "accent_dim": "#d8e6f5",
+        "bg": "#0b0f16",
+        "panel": "#111624",
+        "panel2": "#161d2e",
+        "border": "#222b40",
+        "text": "#e8ecf4",
+        "muted": "#8f9ab0",
+        "accent": "#3d8bfd",
+        "accent_dim": "#16294a",
         "accent_text": "#ffffff",
-        "accent_hover": "#0c4886",
-        "bot": "#ffffff",
-        "ok": "#2e7d4f",
-        "err": "#c0392b",
-        "warn": "#b7791f",
-        "code_bg": "#eef3fa",
-        "grid": "#d5e0ee",
+        "accent_hover": "#2f6fd8",
+        "bot": "#111624",
+        "ok": "#34d399",
+        "err": "#f87171",
+        "warn": "#fbbf24",
+        "code_bg": "#0a0e18",
+        "grid": "#222b40",
     "cycle": [
-        "#0f5aa8", "#2e7d4f", "#b7791f", "#c0563f", "#7a5cae",
-        "#2f8f9e", "#c1567f", "#5b6b81", "#3f7fd1", "#8f7a3f",
+        "#3d8bfd", "#22c55e", "#eab308", "#a855f7", "#ec4899",
+        "#14b8a6", "#f97316", "#64748b", "#60a5fa", "#84cc16",
     ],
 }
 
@@ -185,6 +183,12 @@ def _t(key: str) -> str:
 
 def _qss() -> str:
     T = THEME
+    # Tables read the system palette unless every surface is named here, so a
+    # dark desktop paints black rows under dark theme text. Every table colour
+    # below is therefore explicit -- never inherited.
+    _hover = T.get("row_hover", T["panel2"])
+    _sel = T.get("sel_bg", T["accent"])
+    _seltx = T.get("sel_text", T["accent_text"])
     return f"""
     QMainWindow, QWidget {{ background: {T['bg']}; color: {T['text']};
         font-size: 14px; }}
@@ -197,7 +201,8 @@ def _qss() -> str:
     QFrame#sep {{ background: {T['border']}; max-height: 1px; border: none; }}
     QComboBox, QLineEdit {{ background: {T['panel2']}; color: {T['text']};
         border: 1px solid {T['border']}; border-radius: 8px;
-        padding: 7px 10px; selection-background-color: {T['accent_dim']}; }}
+        padding: 7px 10px; selection-background-color: {_sel};
+        selection-color: {_seltx}; }}
     QComboBox:focus, QLineEdit:focus {{ border: 1px solid {T['accent']}; }}
     QComboBox::drop-down {{ border: none; background: transparent;
         width: 26px; subcontrol-origin: padding;
@@ -205,12 +210,14 @@ def _qss() -> str:
     QComboBox::down-arrow {{ image: url({_down_arrow_svg(T['muted'])});
         width: 10px; height: 7px; margin-right: 9px; }}
     QComboBox QAbstractItemView {{ background: {T['panel2']};
-        color: {T['text']}; selection-background-color: {T['accent_dim']};
+        color: {T['text']}; selection-background-color: {_sel};
+        selection-color: {_seltx};
         border: 1px solid {T['border']}; outline: none; }}
     QPushButton {{ background: {T['panel2']}; color: {T['text']};
         border: 1px solid {T['border']}; border-radius: 8px;
         padding: 8px 14px; }}
     QPushButton:hover {{ border: 1px solid {T['accent']}; }}
+    QPushButton:focus {{ border: 2px solid {T['accent']}; }}
     QPushButton:disabled {{ color: {T['muted']}; }}
     QPushButton#primary {{ background: {T['accent']}; color: {T['accent_text']};
         border: none; font-weight: 700; }}
@@ -223,9 +230,37 @@ def _qss() -> str:
     QListWidget {{ background: {T['panel2']}; color: {T['text']};
         border: 1px solid {T['border']}; border-radius: 8px; padding: 4px; }}
     QListWidget::item {{ padding: 5px 6px; border-radius: 6px; }}
-    QListWidget::item:selected {{ background: {T['accent_dim']}; }}
+    QListWidget::item:selected {{ background: {_sel};
+        color: {_seltx}; }}
     QTextBrowser {{ background: {T['bg']}; color: {T['text']};
         border: none; font-size: 14px; }}
+
+    /* ---- tables: every surface named explicitly ---------------------- */
+    QTableWidget, QTableView {{ background: {T['panel']};
+        alternate-background-color: {T['panel2']}; color: {T['text']};
+        gridline-color: {T['border']}; border: 1px solid {T['border']};
+        border-radius: 8px; outline: none;
+        selection-background-color: {_sel};
+        selection-color: {_seltx}; }}
+    QTableWidget::item, QTableView::item {{ background: transparent;
+        color: {T['text']}; padding: 5px 8px; border: none; }}
+    QTableWidget::item:hover, QTableView::item:hover {{ background: {_hover};
+        color: {T['text']}; }}
+    QTableWidget::item:selected, QTableView::item:selected {{
+        background: {_sel}; color: {_seltx}; }}
+    QTableWidget::item:selected:!active, QTableView::item:selected:!active {{
+        background: {_sel}; color: {_seltx}; }}
+    QHeaderView {{ background: {T['panel2']}; border: none; }}
+    QHeaderView::section {{ background: {T['panel2']}; color: {T['text']};
+        padding: 7px 8px; border: none;
+        border-right: 1px solid {T['border']};
+        border-bottom: 1px solid {T['border']}; font-weight: 600; }}
+    QHeaderView::section:hover {{ background: {T['accent_dim']};
+        color: {T['text']}; }}
+    QHeaderView::section:last {{ border-right: none; }}
+    QTableCornerButton::section {{ background: {T['panel2']};
+        border: none; border-bottom: 1px solid {T['border']}; }}
+
     QProgressBar {{ background: {T['panel2']}; border: 1px solid {T['border']};
         border-radius: 6px; height: 6px; }}
     QProgressBar::chunk {{ background: {T['accent']}; border-radius: 6px; }}
@@ -233,9 +268,17 @@ def _qss() -> str:
     QScrollBar::handle:vertical {{ background: {T['border']};
         border-radius: 5px; min-height: 30px; }}
     QScrollBar::handle:vertical:hover {{ background: {T['muted']}; }}
-    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+    QScrollBar:horizontal {{ background: transparent; height: 10px;
+        margin: 2px; }}
+    QScrollBar::handle:horizontal {{ background: {T['border']};
+        border-radius: 5px; min-width: 30px; }}
+    QScrollBar::handle:horizontal:hover {{ background: {T['muted']}; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
+    QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
     QStatusBar {{ background: {T['panel']}; color: {T['muted']}; }}
     QSplitter::handle {{ background: {T['border']}; }}
+    QToolTip {{ background: {T['panel']}; color: {T['text']};
+        border: 1px solid {T['border']}; padding: 5px 8px; }}
     QPushButton#chip {{ background: {T['panel2']}; color: {T['text']};
         border: 1px solid {T['border']}; border-radius: 16px;
         padding: 9px 16px; text-align: center; }}
@@ -255,7 +298,6 @@ def _qss() -> str:
     QLabel#typing {{ color: {T['accent']}; font-size: 12px; }}
     """
 
-
 class MainWindow(QMainWindow):
     _prov_seq = 0
 
@@ -266,6 +308,7 @@ class MainWindow(QMainWindow):
 
         self.pool = QThreadPool()
         self.busy = False
+        self._ollama_alive = None   # unknown until the startup check returns
         self._img_counter = 0
         self.pending_files: list[str] = []
         self._pending_options: list[str] = []
@@ -281,34 +324,58 @@ class MainWindow(QMainWindow):
         self._sidebar_w = 340        # remembered expanded width
         self._anims = []             # keep refs so animations aren't GC'd
         self._pending_table = None   # table awaiting row-by-row reveal
-        self.is_dark_theme = False
         self.theme_manager = ThemeManager()
-        self.current_theme = self.theme_manager.get_theme(self.is_dark_theme)
+        self.theme_name = ThemeManager.get(
+            getattr(cfg, "UI_THEME", "Dark")).get("name", "Dark")
+        self.current_theme = dict(ThemeManager.get(self.theme_name))
+        self.is_dark_theme = self.theme_name != "Light"   # back-compat
+        THEME.clear()
+        THEME.update(self.current_theme)
 
         self.ollama = OllamaClient(cfg.OLLAMA_HOST)
         self.store = VectorStore()
         self.rag = RAGPipeline(self.ollama, self.store, cfg.DEFAULT_CHAT_MODEL,
                                cfg.DEFAULT_EMBED_MODEL)
-        self.agent = Agent(self.ollama, self.rag, cfg.DEFAULT_CHAT_MODEL)
+        self.bridge = None
+        if getattr(cfg, "BACKEND_URL", ""):
+            # Thin-client mode: the Dockerised backend answers everything.
+            from jarvisman.ui.remote import RemoteBridge
+            self.bridge = RemoteBridge(cfg.BACKEND_URL)
+            self.agent = self.bridge
+        else:
+            self.agent = Agent(self.ollama, self.rag, cfg.DEFAULT_CHAT_MODEL)
 
-        self.setStyleSheet(self._get_stylesheet())
+        self.setStyleSheet(_qss())
         self._build_ui()
         self._startup_checks()
         self.conversation_history = []  # Store all messages
 
     # ------------------------------------------------------------------ #
     def _build_ui(self) -> None:
+        from PyQt6.QtWidgets import QStackedWidget
+        from jarvisman.ui.pages import DashboardPage, ReportsPage, SystemPage
+
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.sidebar = self._build_left_panel()
+        self.sidebar = self._build_sidebar()
+        self.pages = QStackedWidget()
+        self.dashboard_page = DashboardPage(self)
+        self.chat_page = self._build_chat_panel()
+        self.reports_page = ReportsPage(self)
+        self.system_page = SystemPage(self)
+        for p in (self.dashboard_page, self.chat_page,
+                  self.reports_page, self.system_page):
+            self.pages.addWidget(p)
         self.splitter.addWidget(self.sidebar)
-        self.splitter.addWidget(self._build_chat_panel())
+        self.splitter.addWidget(self.pages)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([340, 840])
+        self.splitter.setSizes([252, 928])
         self.splitter.setHandleWidth(1)
         self.setCentralWidget(self.splitter)
         self.status = self.statusBar()
         self.status.showMessage(_t("ready"))
+        self._go("dashboard")
+        self._refresh_sources()
 
     def _card(self):
         card = QFrame()
@@ -318,32 +385,260 @@ class MainWindow(QMainWindow):
         lay.setSpacing(8)
         return card, lay
 
-    def _build_left_panel(self) -> QWidget:
-        panel = QWidget()
-        outer = QVBoxLayout(panel)
-        outer.setContentsMargins(14, 14, 10, 14)
-        outer.setSpacing(12)
+    # ------------------------------------------------------------------ #
+    # Sidebar: brand, New chat, navigation, data sources, status footer.  #
+    # ------------------------------------------------------------------ #
+    _NAV = [("dashboard", "\u25a6", "Dashboard"),
+            ("chat",      "\ud83d\udcac", "Chat"),
+            ("reports",   "\u2263", "Reports"),
+            ("system",    "\u2699", "System")]
 
+    def _build_sidebar(self) -> QWidget:
+        from PyQt6.QtWidgets import QScrollArea, QSizePolicy
+
+        panel = QWidget()
+        panel.setObjectName("sidebar")
+        panel.setMinimumWidth(224)
+        panel.setMaximumWidth(300)
+        outer = QVBoxLayout(panel)
+        outer.setContentsMargins(14, 16, 14, 12)
+        outer.setSpacing(10)
+
+        # brand row --------------------------------------------------- #
         brand = QHBoxLayout()
-        mark = QLabel("\u25c6")
-        mark.setStyleSheet(f"color:{THEME['accent']}; font-size:18px;")
-        names = QVBoxLayout()
-        names.setSpacing(0)
-        title = QLabel(cfg.ASSISTANT_NAME)
-        title.setStyleSheet("font-size:16px; font-weight:800;")
+        brand.setSpacing(8)
+        title = QLabel(cfg.ASSISTANT_NAME.lower())
+        title.setStyleSheet("font-size:17px; font-weight:900; "
+                            "letter-spacing:0.5px;")
         subtitle = QLabel(_t("title"))
         subtitle.setObjectName("muted")
-        names.addWidget(title)
-        names.addWidget(subtitle)
-        self.health_dot = QLabel("\u25cf")
-        self.health_dot.setStyleSheet(f"color:{THEME['muted']}; font-size:12px;")
-        self.health_dot.setToolTip("Ollama status")
-        brand.addWidget(mark)
-        brand.addLayout(names)
+        brand.addWidget(title)
+        brand.addWidget(subtitle)
         brand.addStretch(1)
-        brand.addWidget(self.health_dot)
         outer.addLayout(brand)
+        outer.addSpacing(4)
 
+        # New chat ------------------------------------------------------ #
+        self.sidebar_newchat = QPushButton("+  " + _t("new_chat"))
+        self.sidebar_newchat.setObjectName("primary")
+        self.sidebar_newchat.setMinimumHeight(38)
+        self.sidebar_newchat.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sidebar_newchat.clicked.connect(self._sidebar_new_chat)
+        outer.addWidget(self.sidebar_newchat)
+        outer.addSpacing(6)
+
+        # navigation ----------------------------------------------------- #
+        self._nav_buttons = {}
+        for key, icon, label in self._NAV:
+            btn = QPushButton(f"{icon}   {label}")
+            btn.setObjectName("nav")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, k=key: self._go(k))
+            self._nav_buttons[key] = btn
+            outer.addWidget(btn)
+
+        outer.addSpacing(10)
+        src_head = QLabel("DATA SOURCES")
+        src_head.setObjectName("heading")
+        outer.addWidget(src_head)
+
+        self._sources_box = QWidget()
+        self._sources_lay = QVBoxLayout(self._sources_box)
+        self._sources_lay.setContentsMargins(0, 2, 0, 2)
+        self._sources_lay.setSpacing(3)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("background: transparent;")
+        scroll.setWidget(self._sources_box)
+        scroll.setSizePolicy(QSizePolicy.Policy.Preferred,
+                             QSizePolicy.Policy.Expanding)
+        outer.addWidget(scroll, stretch=1)
+
+        # theme picker ---------------------------------------------------- #
+        trow = QHBoxLayout()
+        trow.setSpacing(6)
+        tlab = QLabel("Theme")
+        tlab.setObjectName("muted")
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(ThemeManager.names())
+        self.theme_combo.setCurrentText(self.theme_name)
+        self.theme_combo.currentTextChanged.connect(self._on_theme_selected)
+        trow.addWidget(tlab)
+        trow.addWidget(self.theme_combo, stretch=1)
+        outer.addLayout(trow)
+
+        # status footer --------------------------------------------------- #
+        foot = QVBoxLayout()
+        foot.setSpacing(2)
+        srow = QHBoxLayout()
+        srow.setSpacing(6)
+        self.health_dot = QLabel("\u25cf")
+        self.health_dot.setStyleSheet(
+            f"color:{THEME['muted']}; font-size:11px;")
+        self.health_dot.setToolTip("Ollama status")
+        self.sidebar_model = QLabel(cfg.DEFAULT_CHAT_MODEL)
+        self.sidebar_model.setStyleSheet(
+            f"color:{THEME['muted']}; font-size:11px; "
+            f"font-family:'Consolas','Courier New',monospace;")
+        srow.addWidget(self.health_dot)
+        srow.addWidget(self.sidebar_model)
+        srow.addStretch(1)
+        foot.addLayout(srow)
+        self._offline_lbl = QLabel(
+            "Offline mode \u00b7 All data stays on this device.")
+        self._offline_lbl.setStyleSheet(
+            f"color:{THEME['muted']}; font-size:10px;")
+        self._offline_lbl.setWordWrap(True)
+        foot.addWidget(self._offline_lbl)
+        outer.addLayout(foot)
+        return panel
+
+    def _sidebar_new_chat(self) -> None:
+        self._new_chat()
+        self._go("chat")
+
+    def _go(self, key: str) -> None:
+        order = [k for k, _i, _l in self._NAV]
+        try:
+            idx = order.index(key)
+        except ValueError:
+            return
+        self.pages.setCurrentIndex(idx)
+        for k, btn in self._nav_buttons.items():
+            btn.setChecked(k == key)
+        page = self.pages.currentWidget()
+        if hasattr(page, "refresh") and key != "chat":
+            try:
+                page.refresh()
+            except Exception:
+                pass
+        if getattr(cfg, "ANIMATIONS", True):
+            try:
+                eff = QGraphicsOpacityEffect(page)
+                page.setGraphicsEffect(eff)
+                anim = QPropertyAnimation(eff, b"opacity", self)
+                anim.setDuration(190)
+                anim.setStartValue(0.0)
+                anim.setEndValue(1.0)
+                anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+                anim.finished.connect(
+                    lambda p=page: p.setGraphicsEffect(None))
+                self._run_anim(anim)
+            except Exception:
+                page.setGraphicsEffect(None)
+
+    # -- data-source rail -------------------------------------------------- #
+    @staticmethod
+    def _source_code(name: str, i: int) -> str:
+        """Short badge code for a table name (e.g. 'CY01' if embedded in the
+        name, else a numbered fallback)."""
+        import re as _re
+        m = _re.search(r"\b([A-Z]{2,4}\d{1,3})\b", str(name).upper())
+        if m:
+            return m.group(1)
+        stem = _re.sub(r"[^A-Za-z]", "", str(name))[:3].upper() or "TBL"
+        return f"{stem}{i + 1}" if stem == "TBL" else stem
+
+    def _refresh_sources(self) -> None:
+        """Rebuild the sidebar's DATA SOURCES rail from the loaded tables and
+        the indexed PDF chunks."""
+        if not hasattr(self, "_sources_lay"):
+            return
+        lay = self._sources_lay
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        cycle = THEME["cycle"]
+
+        def _row(badge: str, color: str, label: str, extra: str = "") -> QWidget:
+            roww = QWidget()
+            rl = QHBoxLayout(roww)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            chip = QLabel(badge)
+            chip.setStyleSheet(
+                f"background:{color}; color:#ffffff; font-size:9px; "
+                f"font-weight:700; border-radius:6px; padding:2px 6px;")
+            lbl = QLabel(label)
+            lbl.setStyleSheet(f"color:{THEME['text']}; font-size:12px;")
+            rl.addWidget(chip)
+            rl.addWidget(lbl, stretch=1)
+            if extra:
+                ex = QLabel(extra)
+                ex.setStyleSheet(f"color:{THEME['muted']}; font-size:10px;")
+                rl.addWidget(ex)
+            return roww
+
+        if self.bridge is not None:
+            st = self.bridge.status()
+            tables = {t["name"]: None for t in (st.get("tables") or [])}
+        else:
+            tables = getattr(self.agent, "dataframes", {}) or {}
+        for i, name in enumerate(tables):
+            code = self._source_code(name, i)
+            color = cycle[i % len(cycle)]
+            label = str(name)
+            if len(label) > 24:
+                label = label[:23] + "\u2026"
+            lay.addWidget(_row(code, color, label))
+
+        if self.bridge is not None:
+            st = self.bridge.status()
+            docs = [(d.get("file", "?"), int(d.get("pages") or 0))
+                    for d in (st.get("docs") or [])]
+        else:
+            docs = self._indexed_documents()
+        if docs:
+            lay.addWidget(_row("PDF", "#2f6fd8", "Document Knowledge",
+                               f"{len(docs)} files"))
+            for fname, pages in docs:
+                lbl = fname if len(fname) <= 26 else fname[:25] + "\u2026"
+                sub = QLabel(f"   {lbl}")
+                sub.setStyleSheet(f"color:{THEME['muted']}; font-size:11px;")
+                sub.setToolTip(fname)
+                wrap = QWidget()
+                wl = QHBoxLayout(wrap)
+                wl.setContentsMargins(6, 0, 0, 0)
+                wl.setSpacing(4)
+                wl.addWidget(sub, stretch=1)
+                pg = QLabel(f"{pages}p")
+                pg.setStyleSheet(f"color:{THEME['muted']}; font-size:10px;")
+                wl.addWidget(pg)
+                lay.addWidget(wrap)
+        if not tables and not docs:
+            empty = QLabel("No data loaded yet.\nSystem \u2192 Add documents.")
+            empty.setStyleSheet(f"color:{THEME['muted']}; font-size:11px;")
+            lay.addWidget(empty)
+        lay.addStretch(1)
+
+    def _indexed_documents(self) -> list:
+        """(filename, n_locations) for every indexed PDF, from chunk metadata."""
+        counts: dict = {}
+        try:
+            for c in getattr(self.store, "chunks", []) or []:
+                src = c.get("source")
+                if src:
+                    counts.setdefault(src, set()).add(c.get("location", ""))
+        except Exception:
+            return []
+        return sorted((k, len(v)) for k, v in counts.items())
+
+    def _refresh_workspace(self) -> None:
+        """Refresh sidebar + all non-chat pages after data changes."""
+        self._refresh_sources()
+        for attr in ("dashboard_page", "reports_page", "system_page"):
+            page = getattr(self, attr, None)
+            if page is not None and hasattr(page, "refresh"):
+                try:
+                    page.refresh()
+                except Exception:
+                    pass
+
+    def _build_models_card(self) -> QWidget:
         card, lay = self._card()
         lay.addWidget(self._heading(_t("models")))
         lay.addWidget(self._field_label(_t("chat_model")))
@@ -385,9 +680,10 @@ class MainWindow(QMainWindow):
         self.refresh_btn = QPushButton(_t("refresh"))
         self.refresh_btn.clicked.connect(self._load_models)
         lay.addWidget(self.refresh_btn)
-        outer.addWidget(card)
         self._update_embed_warning(self.embed_combo.currentText())
+        return card
 
+    def _build_documents_card(self) -> QWidget:
         card2, lay2 = self._card()
         lay2.addWidget(self._heading(_t("documents")))
         self.file_list = QListWidget()
@@ -416,8 +712,14 @@ class MainWindow(QMainWindow):
         self.progress.setTextVisible(False)
         self.progress.setVisible(False)
         lay2.addWidget(self.progress)
-        outer.addWidget(card2, stretch=1)
-        return panel
+        if self.bridge is not None:
+            for b in (self.add_btn, self.build_btn,
+                      self.load_btn, self.clear_btn):
+                b.setEnabled(False)
+                b.setToolTip("Managed by the backend container "
+                             "(docker compose run --rm app index /files)")
+            self.index_label.setText("Index lives on the backend.")
+        return card2
 
     def _build_chat_panel(self) -> QWidget:
         panel = QWidget()
@@ -431,14 +733,10 @@ class MainWindow(QMainWindow):
         self.toggle_btn.setToolTip(_t("settings"))
         self.toggle_btn.clicked.connect(self._toggle_sidebar)
         header.addWidget(self.toggle_btn)
-        
-        # ADD THEME TOGGLE BUTTON
-        self.theme_btn = QToolButton()
-        self.theme_btn.setText("🌙")
-        self.theme_btn.setToolTip("Toggle theme")
-        self.theme_btn.clicked.connect(self._toggle_theme)
-        header.addWidget(self.theme_btn)
-        
+
+        # NOTE: the theme picker lives in the sidebar (self.theme_combo) --
+        # a second control here was redundant.
+
         header.addStretch(1)
         self.typing_label = QLabel("")
         self.typing_label.setObjectName("typing")
@@ -459,21 +757,8 @@ class MainWindow(QMainWindow):
         self.chat.setOpenLinks(False)
         self.chat.anchorClicked.connect(self._on_anchor)
         self.chat.setVisible(False)
-        
-        # Chart visualization widgets (NEW)
-        self.data_summary = DataSummaryPanel(theme=self.current_theme)
-        self.data_summary.setVisible(False)
-        
-        self.chart_selector = ChartTypeSelector(parent=self, theme=self.current_theme)
-        self.chart_selector.visualization_requested.connect(self._on_chart_visualization_requested)
-        self.chart_selector.setVisible(False)
-        
-        # Create layout with chat and chart widgets
-        chat_layout = QVBoxLayout()
-        chat_layout.addWidget(self.chat, stretch=1)
-        chat_layout.addWidget(self.data_summary)
-        chat_layout.addWidget(self.chart_selector)
-        layout.addLayout(chat_layout)
+
+        layout.addWidget(self.chat, stretch=1)
         
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -677,102 +962,83 @@ class MainWindow(QMainWindow):
         self.advanced_btn.setText(f"{arrow} " + _t("advanced"))
     
     def _toggle_theme(self) -> None:
-        """Crossfade to the other theme: snapshot the current window, swap the
-        theme underneath, then fade the snapshot out for a smooth transition."""
-        if not getattr(cfg, "ANIMATIONS", True):
-            self._apply_theme_swap()
-            return
-        try:
-            pix = self.grab()
-            overlay = QLabel(self)
-            overlay.setPixmap(pix)
-            overlay.setGeometry(self.rect())
-            overlay.raise_()
-            overlay.show()
-            eff = QGraphicsOpacityEffect(overlay)
-            overlay.setGraphicsEffect(eff)
-            self._apply_theme_swap()
-            anim = QPropertyAnimation(eff, b"opacity", self)
-            anim.setDuration(getattr(cfg, "ANIM_DURATION_MS", 240))
-            anim.setStartValue(1.0)
-            anim.setEndValue(0.0)
-            anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
-            anim.finished.connect(overlay.deleteLater)
-            self._run_anim(anim)
-        except Exception:
-            self._apply_theme_swap()
+        """Quick-cycle to the next theme (Dark → Light → Emerald → Purple)."""
+        self._set_theme(ThemeManager.next_name(self.theme_name))
 
-    def _apply_theme_swap(self) -> None:
-        """Toggle between dark and light theme."""
-        self.is_dark_theme = not self.is_dark_theme
-        self.current_theme = self.theme_manager.get_theme(self.is_dark_theme)
-        
+    def _on_theme_selected(self, name: str) -> None:
+        if name and name != self.theme_name:
+            self._set_theme(name)
+
+    def _set_theme(self, name: str) -> None:
+        """Swap to the named theme immediately.
+
+        This used to crossfade: grab a pixmap of the CURRENT window, lay it
+        over everything at full opacity, apply the new palette underneath,
+        then fade the snapshot out. The result was that switching to Dark
+        showed a full-opacity frame of the OLD (Light) theme for the whole
+        animation before revealing the new one -- which reads as a flash /
+        glitch rather than a transition. A palette swap is better instant.
+        """
+        if name == self.theme_name or name not in ThemeManager.names():
+            return
+        self._apply_theme_name(name)
+
+    def _apply_theme_name(self, name: str) -> None:
+        """Swap every themed surface to the named palette."""
+        old_theme = dict(self.current_theme)
+        self.theme_name = name
+        self.current_theme = dict(ThemeManager.get(name))
+        self.is_dark_theme = name != "Light"
         T = self.current_theme
-        
-        # Update button
-        self.theme_btn.setText("☀️" if self.is_dark_theme else "🌙")
-        
-        # Update main stylesheet
-        self.setStyleSheet(self._get_stylesheet())
-        
-        # Get current HTML
+        THEME.clear()
+        THEME.update(T)
+
+        if hasattr(self, "theme_combo"):
+            self.theme_combo.blockSignals(True)
+            self.theme_combo.setCurrentText(name)
+            self.theme_combo.blockSignals(False)
+
+        self.setStyleSheet(_qss())
+
+        # Re-tint the transcript in place (old palette -> new palette).
         html_content = self.chat.toHtml()
-        
         if html_content:
-            # Replace theme colors in the HTML
-            old_theme = self.theme_manager.get_theme(not self.is_dark_theme)
-            
-            # Replace old colors with new colors
-            html_content = html_content.replace(old_theme['bg'], T['bg'])
-            html_content = html_content.replace(old_theme['text'], T['text'])
-            html_content = html_content.replace(old_theme['panel'], T['panel'])
-            html_content = html_content.replace(old_theme['accent'], T['accent'])
-            html_content = html_content.replace(old_theme['accent_dim'], T['accent_dim'])
-            html_content = html_content.replace(old_theme['panel2'], T['panel2'])
-            html_content = html_content.replace(old_theme['border'], T['border'])
-            html_content = html_content.replace(old_theme['code_bg'], T['code_bg'])
-            html_content = html_content.replace(old_theme['muted'], T['muted'])
-            
-            # Re-apply the updated HTML
+            for key in ("bg", "text", "panel", "accent", "accent_dim",
+                        "panel2", "border", "code_bg", "muted"):
+                o, n = old_theme.get(key), T.get(key)
+                if o and n and o != n:
+                    html_content = html_content.replace(o, n)
             self.chat.setHtml(html_content)
-        
-        # Update chat widget COLORS WITHOUT clearing text
+
         self.chat.setStyleSheet(
-            f"""
-            QTextBrowser {{
-                background-color: {T['bg']};
-                color: {T['text']};
-                border: none;
-                font-size: 14px;
-            }}
-            """
-        )
-        
-        # Update input box
+            f"QTextBrowser {{ background-color: {T['bg']}; "
+            f"color: {T['text']}; border: none; font-size: 14px; }}")
         self.input.setStyleSheet(
-            f"""
-            QLineEdit {{
-                background: {T['panel2']};
-                color: {T['text']};
-                border: 1px solid {T['border']};
-                border-radius: 8px;
-                padding: 7px 10px;
-            }}
-            """
-        )
-        
-        # Update sidebar
-        self.sidebar.setStyleSheet(f"QWidget {{ background: {T['bg']}; }}")
-    
-        # Force button to keep primary styling
-        if hasattr(self, 'build_btn'):
-            self.build_btn.setStyleSheet("")  # Clear
-            self.build_btn.setStyleSheet(self._get_stylesheet())  # Reapply
-        
-        # Force repaint
+            f"QLineEdit {{ background: {T['panel2']}; color: {T['text']}; "
+            f"border: 1px solid {T['border']}; border-radius: 8px; "
+            f"padding: 7px 10px; }}")
+        self.sidebar.setStyleSheet(
+            f"QWidget#sidebar {{ background: {T['bg']}; "
+            f"border-right: 1px solid {T['border']}; }}")
+
+        # footer labels carry inline colours -> restyle them
+        if hasattr(self, "sidebar_model"):
+            self.sidebar_model.setStyleSheet(
+                f"color:{T['muted']}; font-size:11px; "
+                f"font-family:'Consolas','Courier New',monospace;")
+        if hasattr(self, "_offline_lbl"):
+            self._offline_lbl.setStyleSheet(
+                f"color:{T['muted']}; font-size:10px;")
+        alive = getattr(self, "_ollama_alive", None)
+        dot = T["ok"] if alive else (T["err"] if alive is False
+                                     else T["muted"])
+        if hasattr(self, "health_dot"):
+            self.health_dot.setStyleSheet(f"color:{dot}; font-size:11px;")
+
+        # rebuild the data rail + pages so charts/cards pick up the palette
+        self._refresh_workspace()
         self.repaint()
         self.update()
-
 
     @staticmethod
     def _looks_like_embedder(name: str) -> bool:
@@ -788,6 +1054,9 @@ class MainWindow(QMainWindow):
         self.embed_warn.setVisible(bad)
 
     def _has_data(self) -> bool:
+        if self.bridge is not None:
+            st = self.bridge.status()
+            return bool(st.get("tables")) or int(st.get("chunks") or 0) > 0
         return bool(self.agent.dataframes) or self.store.count > 0
 
     def _update_welcome(self) -> None:
@@ -808,7 +1077,14 @@ class MainWindow(QMainWindow):
             return
         model = self.agent.chat_model or cfg.DEFAULT_CHAT_MODEL
         self.model_badge.setText("\u25c6 " + model)
-        chunks, tables = self.store.count, len(self.agent.dataframes)
+        if hasattr(self, "sidebar_model"):
+            self.sidebar_model.setText(model)
+        if self.bridge is not None:
+            st = self.bridge.status()
+            chunks = int(st.get("chunks") or 0)
+            tables = len(st.get("tables") or [])
+        else:
+            chunks, tables = self.store.count, len(self.agent.dataframes)
         if chunks == 0 and tables == 0:
             self.index_badge.setText(_t("badge_no_index"))
         else:
@@ -858,19 +1134,51 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ #
     def _startup_checks(self) -> None:
+        if self.bridge is not None:
+            worker = Worker(lambda: bool(self.bridge.health()))
+            worker.signals.result.connect(self._on_health)
+            self.pool.start(worker)
+            return
         worker = Worker(self.ollama.is_alive)
         worker.signals.result.connect(self._on_health)
         self.pool.start(worker)
 
     def _on_health(self, alive: bool) -> None:
+        self._ollama_alive = alive
+        if hasattr(self, "system_page"):
+            try:
+                self.system_page.refresh()
+            except Exception:
+                pass
+        if alive and self.bridge is not None:
+            self.health_dot.setStyleSheet(f"color:{THEME['ok']}; font-size:12px;")
+            self.health_dot.setToolTip(f"Connected to backend {cfg.BACKEND_URL}")
+            self._system_line("Connected to backend.", THEME["ok"])
+            self._update_badges()
+            self._update_welcome()
+            self._refresh_workspace()
+            return
         if alive:
             self.health_dot.setStyleSheet(f"color:{THEME['ok']}; font-size:12px;")
             self.health_dot.setToolTip("Connected to Ollama")
             self._system_line(_t("ready"), THEME["ok"])
             self._load_models()
-            try:                      # preload the model so the first answer is fast
-                warm = Worker(lambda: self.ollama.warmup(cfg.DEFAULT_CHAT_MODEL))
-                self.pool.start(warm)
+            try:
+                # Preload EVERY model the pipeline uses (chat + code +
+                # understanding when they differ). With RAG_KEEP_ALIVE=-1
+                # they then stay resident, so no question ever waits on a
+                # cold model load when the agent switches tools.
+                models = []
+                for role in ("chat", "plan", "codegen", "understand"):
+                    try:
+                        m = cfg.model_for(role, self.agent.chat_model)
+                    except Exception:
+                        m = cfg.DEFAULT_CHAT_MODEL if role == "chat" else ""
+                    if m and m not in models:
+                        models.append(m)
+                for m in models:
+                    warm = Worker(lambda mm=m: self.ollama.warmup(mm))
+                    self.pool.start(warm)
             except Exception:
                 pass
         else:
@@ -964,6 +1272,24 @@ class MainWindow(QMainWindow):
         print(f"DEBUG: Number of files: {len(self.pending_files)}")
         print("="*60 + "\n")
         
+        # filename-vs-content date validation BEFORE indexing: a mis-named
+        # snapshot answers "as at" questions from the wrong period
+        try:
+            from jarvisman.ingest.date_check import check as _dc
+            for _fp in list(self.pending_files):
+                _res = _dc(_fp)
+                if _res and _res.get("mismatch"):
+                    QMessageBox.warning(
+                        self, "Snapshot date mismatch",
+                        f"{_res['file']}\n\nFile name says "
+                        f"{_res['filename_date']} but the data inside is "
+                        f"dated {_res['content_date']}.\n\nIt will still be "
+                        f"indexed, but 'as at' questions for these dates may "
+                        f"answer from the wrong file. Consider renaming the "
+                        f"export first.")
+        except Exception:
+            pass
+
         self._set_busy(True, "Indexing documents…")
         
         worker = Worker(self.rag.index_documents, list(self.pending_files))
@@ -999,6 +1325,7 @@ class MainWindow(QMainWindow):
             f"chunk(s) from PDFs, {stats['tables']} table(s) for querying."
             + detail,
             THEME["muted"])
+        self._refresh_workspace()
 
     def _load_index(self) -> None:
         if self.busy:
@@ -1021,6 +1348,13 @@ class MainWindow(QMainWindow):
         self._system_line(
             f"Loaded saved index ({self.store.count} text chunk(s), "
             f"{n_tables} table(s) restored).", THEME["muted"])
+        if getattr(self.rag, "index_stale", False):
+            self._system_line(
+                "\u26a0 This index was built by an older data-parsing version, "
+                f"so recent parsing fixes aren't applied to it. Re-index your "
+                f"source files (or run 'python -m jarvisman.cli reindex') to "
+                f"apply them.", THEME.get("warn", "#fbbf24"))
+        self._refresh_workspace()
 
     def _new_chat(self) -> None:
         """Start a fresh conversation: clear the transcript and the agent's
@@ -1071,6 +1405,7 @@ class MainWindow(QMainWindow):
         self._refresh_index_label()
         self._update_badges()
         self._update_welcome()
+        self._refresh_workspace()
         self.status.showMessage("Index cleared.", 4000)
 
     def _refresh_index_label(self) -> None:
@@ -1266,6 +1601,26 @@ class MainWindow(QMainWindow):
         if chips:
             self._append_html(f'<div style="margin:6px 0 2px 0;">'
                               f'{"&nbsp;".join(chips)}</div>')
+        
+
+    def _on_chart_visualization_requested(self, chart_type: str, df) -> None:
+        """Handle a request from the inline ChartTypeSelector (the '📊
+        Visualize as: ...' bar shown under an answer whose result looks
+        chartable). Opens a full ChartWindow over that data, pre-set to the
+        chart type the user picked in the dropdown."""
+        try:
+            from jarvisman.ui import charting
+            from jarvisman.ui.chart_window import ChartWindow
+            title = getattr(self, "_last_question", "") or "Result"
+            win = ChartWindow(title, df, theme=self.current_theme, parent=self)
+            if chart_type in charting.CHART_TYPES:
+                win.type_combo.setCurrentText(chart_type)
+            self._chart_windows.append(win)   # keep a ref so Qt won't GC it
+            win.show()
+            win.raise_()
+        except Exception as exc:  # never let a chart failure break the chat
+            self.status.showMessage(f"Could not open chart: {exc}", 6000)
+
 
     def _open_chart(self, key: str) -> None:
         data = self._chart_store.get(key)
@@ -1300,7 +1655,7 @@ class MainWindow(QMainWindow):
                 headers, rows, theme=self.current_theme, parent=self,
                 total_rows=total)
             self._chart_windows.append(win)   # same list keeps it alive
-            win.show()
+            win.showMaximized()               # open full-size so big tables are readable
             win.raise_()
         except Exception as exc:  # never let it break the chat
             self.status.showMessage(f"Could not open table: {exc}", 6000)
@@ -1400,27 +1755,57 @@ class MainWindow(QMainWindow):
         self._append_html("".join(out))
         return True
 
-    def _append_reply_time(self) -> None:
-        """One muted line under the finished answer: how long it took. Shown
-        only AFTER completion (the status bar covers 'during')."""
+    def _append_answer_footer(self, result: dict = None) -> None:
+        """One muted footer under the finished answer: elapsed time and the
+        tables the generated code read. Previously two separate divs at two
+        font sizes, emitted from four call sites in inconsistent order.
+
+        Provenance is what makes the numbers defensible -- never hidden. The
+        timing always renders once a question has started, so a missing line
+        means a bug, not a fast answer."""
         t0 = getattr(self, "_q_t0", None)
-        if t0 is None:
+        if t0 is None and result is None:
             return
-        import time as _time
-        secs = _time.monotonic() - t0
-        self._q_t0 = None
-        label = (f"{secs:.1f}s" if secs < 120
-                 else f"{int(secs // 60)}m {int(secs % 60)}s")
+        parts = []
+        if t0 is not None:
+            import time as _time
+            secs = _time.monotonic() - t0
+            self._q_t0 = None
+            parts.append("\u23f1 " + (f"{secs:.1f}s" if secs < 120
+                         else f"{int(secs // 60)}m {int(secs % 60)}s"))
+        if result is not None:
+            try:
+                from jarvisman.runtime import audit as _audit
+                used = _audit.tables_used(result)
+            except Exception:
+                used = []
+            if used:
+                shown = "; ".join(html.escape(u) for u in used[:4])
+                more = f" (+{len(used) - 4} more)" if len(used) > 4 else ""
+                parts.append(f"Source tables: {shown}{more}")
+        if not parts:
+            return
         T = self.current_theme
         self._append_html(
-            f'<div style="color:{T["muted"]}; font-size:10px; '
-            f'margin:2px 0 6px 0;">\u23f1 answered in {label}</div>')
+            f'<div style="color:{T["muted"]}; font-size:11px; '
+            f'margin:4px 0 8px 0;">{" \u00b7 ".join(parts)}</div>')
 
     def _on_answer(self, result: dict) -> None:
+        # audit every answered question (question -> code -> tables -> answer)
+        try:
+            from jarvisman.runtime import audit as _audit
+            import time as _time
+            _secs = 0.0
+            if getattr(self, "_q_t0", None) is not None:
+                _secs = _time.monotonic() - self._q_t0
+            _audit.log(getattr(self, "_last_question", ""), result, _secs,
+                       client="app")
+        except Exception:
+            pass
         # streamed replies are already in the transcript; render extras inline
         if result.get("streamed"):
             self._render_answer(result)
-            self._append_reply_time()
+            self._append_answer_footer(result)
             return
         # otherwise collect the whole answer and wrap it in one card
         self._buf = []
@@ -1429,6 +1814,7 @@ class MainWindow(QMainWindow):
         finally:
             frags, self._buf = self._buf, None
         if not frags:
+            self._append_answer_footer(result)
             return
         
         # Store answer text for copying
@@ -1506,23 +1892,7 @@ class MainWindow(QMainWindow):
         self.chat.setTextCursor(cur)
         self.chat.ensureCursorVisible()
         self._flush_pending_table()
-        self._append_reply_time()
-
-        # Detect and show chart selector
-        if result:
-            try:
-                response_text = str(result.get("answer", "") or result.get("text", "") or result)
-                extraction = ResponseDataExtractor.detect_numerical_data(response_text)
-                
-                if extraction.has_data and extraction.df is not None:
-                    self.data_summary.update_summary(extraction.df)
-                    self.chart_selector.set_dataframe(extraction.df)
-                    self.chart_selector.set_available_charts(extraction.suggested_charts)
-                    self.chart_selector.setVisible(True)
-                else:
-                    self.chart_selector.setVisible(False)
-            except Exception:
-                self.chart_selector.setVisible(False)
+        self._append_answer_footer(result)
 
 
     def _render_answer(self, result: dict) -> None:
@@ -1537,17 +1907,35 @@ class MainWindow(QMainWindow):
                 presented = self._present_answer(question, result)
                 import re as _re
                 m = _re.search(r"\(How:[^)]*\)", text)
+                rest = text
+                if m:
+                    rest = (text[:m.start()] + text[m.end():]).strip()
+                # Show REAL prose alongside the table — but never raw data
+                # dumps. A repr list ('[...', many "', '" separators) or a
+                # to_string block duplicates the table at best and is a
+                # megabyte wall of text at worst.
+                _dumpish = (rest.lstrip()[:1] in "[{("
+                            or "', '" in rest[:2000]
+                            or rest.count("\n") > 12)
+                if rest and not _dumpish:
+                    shown = rest if len(rest) <= 1500 else (
+                        rest[:1500] + " … (truncated)")
+                    self._append_html(self._md_to_html(shown))
+                elif rest and _dumpish and not presented:
+                    # nothing else would be shown for this text: give a
+                    # short preview instead of the full dump (the table
+                    # below carries the data)
+                    prev = rest[:400] + (" … (truncated)"
+                                         if len(rest) > 400 else "")
+                    self._append_html(
+                        f'<span style="color:{THEME["muted"]}; '
+                        f'font-size:12px;">{html.escape(prev)}</span>')
                 if m:
                     self._append_html(
                         f'<span style="color:{THEME["muted"]}; '
                         f'font-size:12px;">{html.escape(m.group(0))}</span>')
-                elif presented and result.get("prose") and text.strip():
-                    # judgement/comparison: the table alone does NOT answer the
-                    # question, so the phrased answer must be shown
-                    self._append_html(self._md_to_html(text))
-                elif not presented and text and "\n" not in text.strip():
-                    self._append_html(self._md_to_html(text))
                 if presented:
+                    self._append_answer_footer(result)
                     if result.get("code"):
                         self._append_code(result["code"])
                     self._maybe_offer_chart(question, result)
@@ -1556,6 +1944,8 @@ class MainWindow(QMainWindow):
                         self._render_options(options)
                     return
             elif text:
+                if len(text) > 4000:
+                    text = text[:4000] + " … (truncated)"
                 # aligned monospace blocks stay <pre>; prose gets markdown
                 if "\n" in text and "  " in text:
                     self._append_html(
@@ -1574,6 +1964,7 @@ class MainWindow(QMainWindow):
                 self._stash_big_table(_h, _r, result.get("row_count"))
             else:
                 self._append_html(self._styled_table(result["table_html"]))
+        self._append_answer_footer(result)
         if result.get("code"):
             self._append_code(result["code"])
         options = result.get("options") or []
@@ -1796,17 +2187,13 @@ class MainWindow(QMainWindow):
         lines = code.splitlines() or [code]
         expanded = cid in self._code_expanded
         if expanded:
-            # The code occupies the blocks right after the link's block, one
-            # per code line; match them by content and remove the whole run.
-            b, li, last = block.next(), 0, None
-            while b.isValid() and li < len(lines):
-                if not b.text().strip():          # spacer block from insertion
-                    last, b = b, b.next()
-                    continue
-                if b.text().strip() != lines[li].strip():
-                    break
-                last, li, b = b, li + 1, b.next()
-            if last is not None and li == len(lines):
+            # Blocks were tagged with the code id on insertion, so the run is
+            # identified exactly. Matching by text content used to fail on any
+            # code containing a blank line -- which is most generated pandas.
+            b, last = block.next(), None
+            while b.isValid() and b.userState() == cid:
+                last, b = b, b.next()
+            if last is not None:
                 c2 = QTextCursor(self.chat.document())
                 c2.setPosition(block.position() + block.length() - 1)
                 c2.setPosition(last.position() + last.length() - 1,
@@ -1823,6 +2210,11 @@ class MainWindow(QMainWindow):
                 f'padding:6px 12px; border-radius:8px; font-size:12px; '
                 f'white-space:pre-wrap; border:1px solid {T["border"]};">'
                 f'{escaped}</pre>')
+            end_no = self.chat.document().findBlock(c2.position()).blockNumber()
+            b = block.next()
+            while b.isValid() and b.blockNumber() <= end_no:
+                b.setUserState(cid)
+                b = b.next()
             self._code_expanded.add(cid)
         # flip the disclosure arrow (the link itself keeps its href)
         arrow = "\u25be" if cid in self._code_expanded else "\u25b8"
@@ -1855,31 +2247,6 @@ class MainWindow(QMainWindow):
         first = message.splitlines()[0] if message else "Unknown error"
         QMessageBox.warning(self, "Error", first)
         self.status.showMessage(first, 6000)
-
-    def _on_chart_visualization_requested(self, chart_type: str, df) -> None:
-        """Render the chosen chart inline as a themed PNG. Uses the offline
-        matplotlib engine (charting.py) and embeds the image the same way the
-        rest of the app does -- no browser, no JavaScript, no network."""
-        if df is None or getattr(df, "empty", True):
-            self._show_error("No data available for visualization")
-            return
-        try:
-            from jarvisman.ui import charting
-            from jarvisman.ui.chart_window import ChartWindow
-            ct = (chart_type or "bar").lower().strip()
-            ct = "pie" if ct == "donut" else ct            # no donut engine
-            if ct not in charting.CHART_TYPES:
-                ct = "bar"
-            title = getattr(self, "_last_question", "") or "Chart"
-            win = ChartWindow(title, df, theme=self.current_theme, parent=self)
-            win.type_combo.setCurrentText(ct)              # triggers an animated re-plot
-            win.show()
-            win.raise_()
-            # keep a reference so the window is not garbage-collected
-            self._chart_windows = getattr(self, "_chart_windows", [])
-            self._chart_windows.append(win)
-        except Exception as exc:
-            self._show_error(f"Could not open the chart: {type(exc).__name__}")
 
     def _get_stylesheet(self) -> str:
         """Get stylesheet using current theme."""

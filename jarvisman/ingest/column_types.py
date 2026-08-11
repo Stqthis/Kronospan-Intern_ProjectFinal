@@ -8,6 +8,7 @@ import os
 import re
 import warnings
 from typing import Callable, Optional
+from jarvisman.llm.llm_json import extract_json as _extract_json
 
 SAMPLE_ROWS = 100          # rows shown to the model per table
 _MAX_SAMPLE_CHARS = 8000   # cap the rendered sample so the prompt stays bounded
@@ -91,18 +92,7 @@ def _prompt(name: str, df) -> str:
     )
 
 
-def _extract_json(raw: str) -> Optional[dict]:
-    if not raw:
-        return None
-    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE)
-    a, b = raw.find("{"), raw.rfind("}")
-    if a == -1 or b == -1 or b < a:
-        return None
-    try:
-        obj = json.loads(raw[a : b + 1])
-        return obj if isinstance(obj, dict) else None
-    except json.JSONDecodeError:
-        return None
+
 
 
 def _profile_one(ollama, chat_model: str, name: str, df) -> dict:
@@ -261,6 +251,7 @@ def profile_and_apply(ollama, chat_model: str, dataframes: dict,
 
     typed_out: dict = {}
     profile: dict = {}
+    batch_seen: dict[str, dict] = {}   # schema_sig -> profile computed THIS run
     total = len(dataframes)
     for i, (name, df) in enumerate(dataframes.items(), 1):
         if progress:
@@ -273,13 +264,21 @@ def profile_and_apply(ollama, chat_model: str, dataframes: dict,
         sig = _schema_sig(df)
         prior = (existing or {}).get(name) or {}
         if sig and prior.get("schema_hash") == sig and prior.get("columns"):
-            # unchanged schema -> reuse the saved understanding (0 LLM calls)
+            # unchanged schema across runs -> reuse the saved understanding
             if progress:
                 progress(f"Reusing profile for unchanged table: {name}")
             prof = prior
+        elif sig and sig in batch_seen:
+            # sibling table with an identical schema already profiled THIS run
+            # (monthly DDR files, per-entity loan schedules) -> no 2nd LLM call
+            if progress:
+                progress(f"Reusing sibling-schema profile for: {name}")
+            prof = dict(batch_seen[sig])
         else:
             prof = _profile_one(ollama, chat_model, name, df)
             prof["schema_hash"] = sig
+            if sig:
+                batch_seen[sig] = prof
         verdicts = prof.get("columns", {})
 
         typed = df.copy()

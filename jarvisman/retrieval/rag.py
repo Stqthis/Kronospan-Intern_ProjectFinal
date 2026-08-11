@@ -16,6 +16,7 @@ from jarvisman.retrieval.retrieval import BM25Index, chunk_embed_text, rrf_fuse
 from jarvisman.retrieval.vector_store import VectorStore
 from jarvisman.ingest.column_types import profile_and_apply, save_profile, load_profile
 from jarvisman.semantics.semantic_model import build_semantic_model, save_semantic_model, load_semantic_model
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 GROUNDED_SYSTEM = (
     "You are analyzing company financial data with multiple currencies (EUR and Local Currency). "
@@ -147,16 +148,21 @@ class RAGPipeline:
         total_miss = len(misses)
         cached_n = len(texts) - total_miss
         done = 0
-        for start in range(0, total_miss, cfg.EMBED_BATCH_SIZE):
-            idx_batch = misses[start : start + cfg.EMBED_BATCH_SIZE]
-            batch_texts = [texts[i] for i in idx_batch]
-            embs = self.ollama.embed_batch(batch_texts, self.embed_model)
-            for i, e in zip(idx_batch, embs):
-                vectors[i] = e
-                cache.put(self.embed_model, texts[i], e)
-            done += len(idx_batch)
-            if report:
-                report(f"Embedding {done}/{total_miss} new chunk(s) ({cached_n} cached) ...")
+        batches = [misses[s:s + cfg.EMBED_BATCH_SIZE]
+                   for s in range(0, total_miss, cfg.EMBED_BATCH_SIZE)]
+        workers = max(1, min(getattr(cfg, "EMBED_CONCURRENCY", 4), len(batches)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(self.ollama.embed_batch,
+                                [texts[i] for i in b], self.embed_model): b
+                    for b in batches}
+            for fut in as_completed(futs):
+                idx_batch = futs[fut]
+                for i, e in zip(idx_batch, fut.result()):
+                    vectors[i] = e
+                    cache.put(self.embed_model, texts[i], e)   # main thread only: safe
+                done += len(idx_batch)
+                if report:
+                    report(f"Embedding {done}/{total_miss} new chunk(s) ({cached_n} cached) ...")
         cache.save()
         # Defensive: any leftover None (shouldn't happen) embedded individually.
         for i, v in enumerate(vectors):
@@ -474,7 +480,10 @@ class RAGPipeline:
         context, sources = self._build_context(hits)
         
         # Calculate confidence (average score)
-        confidence = sum(hit.get("score", 0) for hit in hits) / len(hits) if hits else 0
+        # hits are (score, chunk) tuples -- see retrieve()'s return type. This
+        # line treated them as dicts, so every document-path answer raised
+        # AttributeError: 'tuple' object has no attribute 'get'.
+        confidence = (sum(score for score, _ in hits) / len(hits)) if hits else 0.0
         
         # Use simple system prompt
         messages = [

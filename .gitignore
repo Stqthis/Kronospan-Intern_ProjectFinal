@@ -1,21 +1,52 @@
+# --------------------------------------------------------------------------- #
+# Python                                                                       #
+# --------------------------------------------------------------------------- #
 __pycache__/
 *.pyc
-eval_questions.txt
-eval_run.txt
+*.pyo
+*.egg-info/
+.pytest_cache/
+venv/
+env/
+.venv/
+
+# --------------------------------------------------------------------------- #
+# Company data -- NEVER commit. Git history is permanent, so anything that
+# lands here once stays recoverable even after a later delete.
+# --------------------------------------------------------------------------- #
+# Source documents (the mounted data folder + any stray spreadsheets/PDFs)
+files/
+data/
+*.xlsx
+*.xls
+*.pdf
+*.csv
+
+# Index / cache artifacts built FROM company data
 *.pkl
 *.faiss
-__pycache__/
-test_funds.py
-test_funds.py
-
-# Index artifacts and source documents (company data -- never commit)
-data/
 table_cards.json
 table_profile.json
 profile.json
 plan_cache.json
-*.xlsx
-*.xls
-*.pdf
-venv/
-env/
+
+# Eval + tuning artifacts: these carry real questions, real entity names and
+# verified ground-truth figures from the production workbooks.
+questions.jsonl
+test_results.json
+eval_questions.txt
+eval_run.txt
+rules.txt
+rules.txt.*
+
+# Local scratch tests
+test_funds.py
+# Local environment / secrets -- the template (.env.example) IS committed,
+# the real file never is.
+.env
+.env.*
+!.env.example
+
+# Runtime error log written by Agent._log_error
+audit/
+errors.log

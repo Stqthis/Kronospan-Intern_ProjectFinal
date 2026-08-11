@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import ast
@@ -159,6 +157,48 @@ def _run_user_code(code: str, dfs: dict, out_q: "mp.Queue") -> None:
 # --------------------------------------------------------------------------- #
 # Analysis executor (child process)                                           #
 # --------------------------------------------------------------------------- #
+def _condense_frame(df, pd):
+    """Shrink a mostly-repetitive result before display.
+
+    Two moves, both information-preserving:
+      1. Lift constant columns (same value in every row) out of the grid into a
+         short caption -- a column repeated identically down 2000 rows is noise.
+      2. If the remaining rows are heavily duplicated, collapse exact duplicates
+         to one row and add a 'count' of how many times each occurred.
+
+    Returns (condensed_df, caption_or_None). Small or already-unique frames are
+    returned unchanged with no caption.
+    """
+    caption_bits = []
+    work = df
+    n = len(work)
+    # 1) lift constant columns (only worth it with several rows and >1 column)
+    if n > 1 and work.shape[1] > 1:
+        const_cols = [c for c in work.columns
+                      if work[c].nunique(dropna=False) <= 1]
+        # never lift away *every* column; keep at least the ones that vary
+        if const_cols and len(const_cols) < work.shape[1]:
+            for c in const_cols:
+                val = work[c].iloc[0]
+                shown = "(blank)" if pd.isna(val) else str(val)
+                caption_bits.append(f"{c} = {shown}")
+            work = work.drop(columns=const_cols)
+    # 2) collapse exact-duplicate rows when duplication is heavy
+    if n > 20:
+        deduped = work.drop_duplicates()
+        if len(deduped) <= n * 0.6 and len(deduped) < n:
+            grouped = (work.groupby(list(work.columns), dropna=False, sort=False)
+                       .size().reset_index(name="count"))
+            grouped = grouped.sort_values("count", ascending=False,
+                                          kind="stable").reset_index(drop=True)
+            caption_bits.append(
+                f"collapsed {n:,} rows -> {len(grouped):,} unique "
+                f"(count column shows how many times each occurs)")
+            work = grouped
+    caption = "; ".join(caption_bits) if caption_bits else None
+    return work, caption
+
+
 def _format_result(obj: Any, pd) -> tuple[Optional[str], Optional[str]]:
     """Turn a result object into (plain_text, html_table_or_None). Numeric
     values are rendered with locale-aware separators (numfmt); 'plain' style
@@ -167,39 +207,87 @@ def _format_result(obj: Any, pd) -> tuple[Optional[str], Optional[str]]:
     plain = numfmt.style() == "plain"
 
     def _fmts(df):
-        return {col: numfmt.fmt for col in df.columns
-                if getattr(df[col].dtype, "kind", "O") in "iuf"}
+        out = {}
+        for col in df.columns:
+            if getattr(df[col].dtype, "kind", "O") not in "iuf":
+                continue
+            if numfmt.is_rate_col(col):
+                # rates always display as percentages (4.236%), whichever
+                # rate column the generated code selected
+                out[col] = numfmt.rate_formatter(df[col].tolist())
+            else:
+                out[col] = numfmt.fmt
+        return out
 
     if obj is None:
         return None, None
     try:
         if isinstance(obj, pd.DataFrame):
+            # Honest empty result: a friendly line, not a raw pandas repr.
+            if obj.empty or len(obj) == 0:
+                return "No matching rows found.", None
+            caption = None
+            if not plain and getattr(cfg, "CONDENSE_TABLES", True):
+                obj, caption = _condense_frame(obj, pd)
+                # everything collapsed to a single record -> read as key/value
+                if len(obj) == 1 and obj.shape[1] <= 1 and caption:
+                    return caption, None
             # Two consumers, two caps: the TEXT is read by the LLM (synthesis)
             # and the eval and must stay small; the HTML goes to the UI, which
             # scrolls, so it may carry far more.
             t_cap = obj.head(cfg.QUERY_MAX_RESULT_ROWS)
-            h_cap = obj.head(getattr(cfg, "QUERY_MAX_TABLE_ROWS", 2000))
+            _tbl_cap = getattr(cfg, "QUERY_MAX_TABLE_ROWS", 2000)
+            h_cap = obj if _tbl_cap <= 0 else obj.head(_tbl_cap)
             extra = len(obj) - len(t_cap)
             note = "" if extra <= 0 else f"\n... ({extra} more rows)"
+            pre = f"[{caption}]\n" if caption else ""
+            html_pre = (f"<p style='margin:0 0 6px;color:#5b6b81'>{caption}</p>"
+                        if caption else "")
             ft = None if plain else _fmts(t_cap)
             fh = None if plain else _fmts(h_cap)
-            return (t_cap.to_string(formatters=ft) + note,
-                    h_cap.to_html(border=1, index=True, formatters=fh))
+            return (pre + t_cap.to_string(formatters=ft) + note,
+                    html_pre + h_cap.to_html(border=1, index=True, formatters=fh))
         if isinstance(obj, pd.Series):
+            if obj.empty or len(obj) == 0:
+                return "No matching rows found.", None
             t_cap = obj.head(cfg.QUERY_MAX_RESULT_ROWS)
-            h_cap = obj.head(getattr(cfg, "QUERY_MAX_TABLE_ROWS", 2000))
+            _tbl_cap = getattr(cfg, "QUERY_MAX_TABLE_ROWS", 2000)
+            h_cap = obj if _tbl_cap <= 0 else obj.head(_tbl_cap)
             extra = len(obj) - len(t_cap)
             note = "" if extra <= 0 else f"\n... ({extra} more rows)"
+            _sfmt = numfmt.fmt
+            if numfmt.is_rate_col(getattr(obj, "name", "")):
+                _sfmt = numfmt.rate_formatter(obj.dropna().tolist())
             shown = t_cap if plain or getattr(t_cap.dtype, "kind", "O") \
-                not in "iuf" else t_cap.map(numfmt.fmt)
+                not in "iuf" else t_cap.map(_sfmt)
             shown_h = h_cap if plain or getattr(h_cap.dtype, "kind", "O") \
-                not in "iuf" else h_cap.map(numfmt.fmt)
+                not in "iuf" else h_cap.map(_sfmt)
             return (shown.to_string() + note,
                     shown_h.to_frame().to_html(border=1, index=True))
+        if isinstance(obj, (list, tuple, set)) and len(obj) > 12:
+            # A long list rendered as repr text is unreadable and can be
+            # megabytes (seen in production: a cross-joined name-change list
+            # repeated hundreds of times). Convert to a real table so the
+            # normal row caps and big-table gating apply; when the code
+            # produced heavy duplication, collapse to unique values + count.
+            items = [str(x) for x in obj]
+            ser = pd.Series(items, name="value")
+            vc = ser.value_counts()
+            if len(vc) <= len(ser) * 0.6:
+                df2 = vc.rename_axis("value").reset_index(name="count")
+            else:
+                df2 = ser.to_frame()
+            return _format_result(df2, pd)
+        if isinstance(obj, (list, tuple, set)):
+            # short lists read best as a plain comma line, not a repr
+            return ", ".join(str(x) for x in obj), None
         if not plain and isinstance(obj, (int, float)) \
                 and not isinstance(obj, bool):
             return numfmt.fmt(obj), None
-        return str(obj), None
+        text = str(obj)
+        if len(text) > 6000:
+            text = text[:6000] + f" … (truncated, {len(str(obj)):,} chars)"
+        return text, None
     except Exception as exc:
         return f"(result could not be formatted: {exc})", None
 

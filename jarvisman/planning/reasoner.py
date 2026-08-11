@@ -52,6 +52,8 @@ _PROSE_INTENT_RE = re.compile(
     r"trend\w*|pattern\w*|notable|unusual|stands? ?out|concerning|"
     r"should (we|i|they)|what do you)\b", re.I)
 
+_LOOSE_RE = re.compile(r"[^0-9a-z\u0370-\u03ff]+")
+
 
 def sibling_choice(question, model, dataframes, max_opts: int = 12):
     """No period/entity signal + several SAME-SCHEMA sheets -> ask which one.
@@ -161,18 +163,29 @@ class TableReasoner:
         if not p:
             return None
         mn = norm_text(message)
+        # Punctuation-insensitive comparison. Option labels carry apostrophes
+        # and parentheses ("Each {what}'s own (original) amounts"); a smart
+        # quote from the UI, or an apostrophe stripped by _clean_columns, is
+        # enough to break strict equality. A failed match used to fall through
+        # to the planner, which then answered the CHIP TEXT as if it were a
+        # data question -- real pandas, wrong question, plausible numbers.
+        _loose = lambda s: _LOOSE_RE.sub("", norm_text(s))
+        ml = _loose(message)
         chosen = None
         if mn.isdigit() and 1 <= int(mn) <= len(p["options"]):
             chosen = p["options"][int(mn) - 1]
         else:
             for opt in p["options"]:
-                if mn == norm_text(opt["label"]) \
-                        or (opt.get("column") and mn == norm_text(opt["column"])):
+                if ml == _loose(opt["label"]) \
+                        or (opt.get("column") and ml == _loose(opt["column"])):
                     chosen = opt
                     break
-        self.pending_clarify = None       # one clarification max, ever
         if chosen is None:
-            return None
+            # Keep the clarification ALIVE. Clearing it here destroyed the
+            # pending state AND let the message through as a fresh question.
+            return {"question": p["question"], "bind": None, "term": "",
+                    "unmatched": True}
+        self.pending_clarify = None       # one clarification max, ever
         if p.get("kind") == "table_choice":
             # Rewrite the question with the chosen period and re-run:
             # content_route() then resolves it deterministically, so there is
@@ -531,11 +544,19 @@ class TableReasoner:
                                notes=plres.notes)
 
     def _planner_tables(self, evidence: Evidence) -> dict:
-        """Tables exposed to the planner. For small workbooks expose ALL of
-        them in stable insertion order: the schema block is then byte-identical
-        across questions, so llama.cpp prompt-prefix caching skips re-evaluating
-        it (a large CPU saving). Only large workbooks fall back to the
-        per-question evidence-ranked subset."""
+        """Tables exposed to the planner.
+
+        When the question names a snapshot date, period or entity value, expose
+        ONLY the sheet(s) that hold it: the capability ranker scores
+        same-schema sheets identically, so without this the planner breaks the
+        tie on prompt position and always picks the same file.
+
+        When it names none of those, fall back to the ORIGINAL behaviour: for a
+        small workbook expose every table in stable insertion order, so the
+        schema block is byte-identical across questions and llama.cpp
+        prompt-prefix caching can skip re-evaluating it. Routing costs that
+        cache (the block now varies per question) -- but a routed block is one
+        table instead of six, and a wrong answer is worse than a slow one."""
         all_names = list(self.dataframes)
         if len(all_names) <= 1:
             return dict(self.dataframes)
@@ -543,21 +564,54 @@ class TableReasoner:
         from jarvisman.semantics.semantic_model import content_route
         cap = cfg.MAX_ANALYSIS_TABLES_REASONER
 
-        # A snapshot date, period or entity value in the question settles which
-        # sheet is meant. Without this the capability ranker ties across
-        # same-schema sheets and the model anchors on prompt position.
         routed = content_route(evidence.question, self.model, max_n=cap)
         value_tables = [n for n in dict.fromkeys(
             h.table for h in evidence.value_hits) if n in self.dataframes]
         lead = list(dict.fromkeys(
             n for n in (routed + value_tables) if n in self.dataframes))
         if lead:
-            return {n: self.dataframes[n] for n in lead[:cap]}
+            chosen = self._ensure_column_coverage(evidence.question, lead[:cap], cap)
+            return {n: self.dataframes[n] for n in chosen}
 
+        # No signal -> keep the cacheable stable-order block for small workbooks
+        if len(all_names) <= 6:
+            return dict(self.dataframes)
         ranked = evidence.ranked_tables(cap)
         chosen = [n for n in ranked if n in self.dataframes] or all_names[:cap]
         return {n: self.dataframes[n] for n in chosen}
 
+
+
+    def _ensure_column_coverage(self, question: str, chosen: list,
+                                cap: int) -> list:
+        """Value/date routing can pick sheets that merely CONTAIN a
+        mentioned value while lacking the COLUMN the question needs
+        ('Italy' appears in one sheet, but only another has Address -- the
+        address question then dead-ends with 'column does not exist').
+        If the question names a real column that none of the chosen
+        tables carries, append the best table that has it."""
+        ql = (question or "").lower()
+        col_tables: dict = {}
+        for name, df in self.dataframes.items():
+            try:
+                for c in df.columns:
+                    cs = str(c).strip().lower()
+                    if len(cs) >= 4 and cs in ql:
+                        col_tables.setdefault(cs, []).append(name)
+            except Exception:
+                continue
+        out = list(chosen)
+        for cs, tables in col_tables.items():
+            if any(t in out for t in tables):
+                continue
+            try:
+                extra = max(tables, key=lambda t: self.dataframes[t].shape[0])
+            except Exception:
+                extra = tables[0]
+            if extra not in out:
+                out.append(extra)
+        return out[: cap + 2]
+        
     @staticmethod
     def _first_alias(plan: QueryPlan) -> str:
         from jarvisman.planning.query_plan import PlanValidator

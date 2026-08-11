@@ -3,6 +3,11 @@ import os
 # --------------------------------------------------------------------------- #
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
+# Remote backend: when set (e.g. http://dgx:8800) the desktop app is a thin
+# client of the Dockerised API (jarvisman.server) — the model and index run
+# on the server; nothing is loaded locally.
+BACKEND_URL = os.environ.get("RAG_BACKEND_URL", "").strip()
+
 
 # Target machine is the DGX Spark: the 32b is the DEFAULT for every call
 # (plan, repair, codegen, synthesis, index-time cards). A CPU laptop
@@ -25,7 +30,17 @@ UNDERSTANDING_MODEL = os.environ.get("RAG_UNDERSTANDING_MODEL", "")
 
 def model_for(role: str, chat_model: str) -> str:
     """Resolve a task ROLE to a concrete model name, falling back to the
-    given chat_model when the role-specific model is not configured."""
+    given chat_model when the role-specific model is not configured.
+
+    Also records the role so the timing module can attribute the model call
+    that follows. Every call site evaluates this inline as chat()'s first
+    argument, so the role is always the one about to run.
+    """
+    try:
+        from jarvisman.runtime import timing
+        timing.set_pending(role)
+    except Exception:
+        pass
     if role == "plan":
         return CODE_MODEL or PLAN_MODEL or chat_model
     if role == "codegen":
@@ -46,6 +61,7 @@ LIST_TIMEOUT = (5, 20)
 # to release it when idle.
 KEEP_ALIVE = os.environ.get("RAG_KEEP_ALIVE", "-1")
 EMBED_BATCH_SIZE = int(os.environ.get("RAG_EMBED_BATCH", "64"))
+EMBED_CONCURRENCY = int(os.environ.get("RAG_EMBED_CONCURRENCY", "4"))
 
 # --------------------------------------------------------------------------- #
 # Retrieval / chunking                                                        #
@@ -58,7 +74,7 @@ RAG_TOP_K = 5
 # the reasoner uses to bind questions to the right column. Do NOT disable.
 SKIP_TABLE_PROFILING = False
 TABLE_CARDS = True
-TABLE_PROFILING_ROWS = 2000   # profile a sample of rows (not all, not zero)
+
 
 FETCH_K = 20               # candidates pulled from EACH retriever before fusion
 TOP_K = 5                  # chunks finally fed to the model
@@ -91,6 +107,11 @@ QUERY_MAX_RESULT_ROWS = 100
 # stays small. The HTML goes to the UI, which has a scrollable TableWindow and
 # can hold far more. Two consumers, two caps.
 QUERY_MAX_TABLE_ROWS = int(os.environ.get("RAG_MAX_TABLE_ROWS", "2000"))
+# Condense a result table before display: lift columns that hold the same value
+# in every row into a one-line caption, and collapse exact-duplicate rows into
+# one with a count. Turns a 2000x7 table that is mostly repetition into the few
+# rows and columns that actually vary. Set RAG_CONDENSE_TABLES=0 to disable.
+CONDENSE_TABLES = os.environ.get("RAG_CONDENSE_TABLES", "1") == "1"
 CATEGORICAL_MAX_UNIQUE = 200
 ANALYSIS_MAX_RETRIES = 2
 
@@ -101,6 +122,14 @@ DATA_DIR = os.environ.get(
     "RAG_DATA_DIR", os.path.join(os.path.expanduser("~"), ".offline_rag_assistant")
 )
 INDEX_DIR = os.path.join(DATA_DIR, "index")
+# Version of the INGESTION/PARSING pipeline that produced a persisted index.
+# Parsed tables live in the index (tables.pkl) and are loaded instead of being
+# re-parsed, so a fix to ingestion has NO effect on an already-built index until
+# it is rebuilt. Bump this whenever the parsing/typing/number-format logic
+# changes: load_persisted compares it to the stamp saved with the index and
+# flags a mismatch so the app can prompt a rebuild (see `reindex`). Date-tagged
+# so the ordering is obvious at a glance.
+PIPELINE_VERSION = os.environ.get("RAG_PIPELINE_VERSION", "2026.02.10-numloc")
 # Persist solved query plans across restarts: a repeated/reworded question is
 # then answered with zero model calls. Keyed by (index version, question).
 PLAN_CACHE_PERSIST = os.environ.get("RAG_PLAN_CACHE_PERSIST", "1") == "1"
@@ -196,8 +225,8 @@ SYNTHESIZE_PROSE_MAX_ROWS = int(os.environ.get("RAG_SYNTH_PROSE_MAX_ROWS", "40")
 SYNTH_PROSE_NUM_PREDICT = int(os.environ.get("RAG_SYNTH_PROSE_NUM_PREDICT", "420"))
 # Results bigger than this open in TableWindow behind a chip instead of being
 # rendered inline (QTextBrowser lays tables out to viewport width).
-UI_TABLE_INLINE_MAX_ROWS = int(os.environ.get("RAG_UI_TABLE_ROWS", "12"))
-UI_TABLE_INLINE_MAX_COLS = int(os.environ.get("RAG_UI_TABLE_COLS", "6"))
+UI_TABLE_INLINE_MAX_ROWS = int(os.environ.get("RAG_UI_TABLE_ROWS", "30"))
+UI_TABLE_INLINE_MAX_COLS = int(os.environ.get("RAG_UI_TABLE_COLS", "10"))
 MAX_ANALYSIS_TABLES_REASONER = int(os.environ.get("RAG_MAX_TABLES", "6"))
 PROMPT_MEANING_MAX_CHARS = 80
 
@@ -211,6 +240,9 @@ VIRTUAL_LONG_VIEWS = os.environ.get("RAG_LONG_VIEWS", "1") == "1"
 EU_NUMBER_PARSE = os.environ.get("RAG_EU_NUMBERS", "1") == "1"
 MULTI_TABLE_SHEETS = os.environ.get("RAG_MULTI_TABLE", "0") == "1"
 UI_LANG = os.environ.get("RAG_UI_LANG", "en")
+
+# UI theme: Dark | Light | Emerald | Purple (see ui/theme_manager.py)
+UI_THEME = os.environ.get("RAG_UI_THEME", "Dark")
 DISTINCT_SELECT = os.environ.get("RAG_DISTINCT", "1") == "1"
 COMPANION_CODES = os.environ.get("RAG_CODES", "1") == "1"
 NUMBER_FORMAT = os.environ.get("RAG_NUM_FORMAT", "locale")

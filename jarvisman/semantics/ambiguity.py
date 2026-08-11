@@ -65,8 +65,8 @@ _T = {
         "only_gen": "Only the items whose {what} is {v}",
         "all_gen": "Everything, using the {what}",
         "as": "{v} as the {what}",
-        "per_native": "Each {what}'s own (original) amounts",
-        "per_conv": "All amounts converted ({what})",
+        "per_native": "Each {what}: original amounts, NOT converted",
+        "per_conv": "All amounts converted to {m}",
         "q_col": ("'{v}' appears in more than one place in the data -- "
                   "which one do you mean?"),
     },
@@ -78,8 +78,8 @@ _T = {
         "only_gen": "Μόνο τις εγγραφές όπου το {what} είναι {v}",
         "all_gen": "Όλα, με βάση το {what}",
         "as": "{v} ως {what}",
-        "per_native": "Τα αρχικά ποσά του κάθε {what} ξεχωριστά",
-        "per_conv": "Όλα τα ποσά μετατρεμμένα ({what})",
+        "per_native": "Κάθε {what}: αρχικά ποσά, ΧΩΡΙΣ μετατροπή",
+        "per_conv": "Όλα τα ποσά μετατρεμμένα σε {m}",
         "q_col": ("Το '{v}' υπάρχει σε περισσότερα από ένα σημεία στα "
                   "δεδομένα -- ποιο από τα δύο εννοείτε;"),
     },
@@ -108,6 +108,23 @@ def _humanize(cp) -> str:
             return meaning[:70].rstrip()
     name = re.sub(r"\s+", " ", str(getattr(cp, "name", "")).strip())
     return name.lower() or "value"
+
+
+def _short_label(cp) -> str:
+    """A column's NAME made readable -- never its meaning sentence.
+
+    _humanize returns the profile's MEANING, up to 70 characters. Dropped into
+    "Each {what}'s own (original) amounts" that produced labels like
+    "Each The currency in which the financial details are reported's own
+    (original) amounts" -- unreadable, so the user could not see that the
+    choice was local-currency vs converted, and picked the wrong reading.
+    """
+    n = re.sub(r"\s+", " ", str(getattr(cp, "name", "") or "")).strip()
+    n = re.sub(r"\s*\((?:in\s+)?[A-Z]{3}\)\s*$", "", n)
+    n = n.replace("_", " ").strip()
+    if n.isupper() or n.islower():
+        n = n.capitalize() if len(n) > 3 else n
+    return (n[:32].rstrip() or "value")
 
 
 def _is_currencyish(cp) -> bool:
@@ -292,8 +309,8 @@ def _per_dimension_measure(question: str, evidence, model,
             if _CURRENCY_RE and not _CURRENCY_RE.search(_blob):
                 continue
             mc = converted[0]
-            what_d = _humanize(dcol)
-            what_m = _humanize(mc)
+            what_d = _short_label(dcol)
+            what_m = _short_label(mc)
             opt_native = {
                 "label": T["per_native"].format(what=what_d),
                 "table": tname, "column": str(dcol.name),
@@ -305,7 +322,7 @@ def _per_dimension_measure(question: str, evidence, model,
                     f"measure that holds the original (unconverted) values."),
             }
             opt_conv = {
-                "label": T["per_conv"].format(what=what_m),
+                "label": T["per_conv"].format(m=what_m),
                 "table": tname, "column": str(mc.name),
                 "directive": (
                     f"group by column '{dcol.name}' of table '{tname}' and "
