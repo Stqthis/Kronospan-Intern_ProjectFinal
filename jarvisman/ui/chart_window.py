@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 from PyQt6.QtCore import Qt, QTimer
 from matplotlib.backends.backend_qtagg import (
@@ -90,7 +91,23 @@ class ChartWindow(QDialog):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        controls = QHBoxLayout()
+        # Plain-language banner: tell the user exactly what the chart shows, so
+        # they never have to reason about axes. Auto-picked; controls are hidden
+        # until they choose to customize.
+        self._spec_default = spec
+        self.desc_label = QLabel(charting.describe_spec(spec))
+        self.desc_label.setWordWrap(True)
+        self.desc_label.setStyleSheet(
+            f"color:{self.theme['text']}; font-size:13px; font-weight:600;")
+        root.addWidget(self.desc_label)
+
+        self.customize_btn = QCheckBox("Customize chart")
+        self.customize_btn.setChecked(False)
+        root.addWidget(self.customize_btn)
+
+        self.controls_box = QWidget()
+        controls = QHBoxLayout(self.controls_box)
+        controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(8)
 
         self.type_combo = QComboBox()
@@ -118,8 +135,8 @@ class ChartWindow(QDialog):
         self.sort_desc = QCheckBox("Sort \u2193")
         self.sort_desc.setChecked(True)
 
-        for lbl, w in (("Type", self.type_combo), ("Axis", self.x_combo),
-                       ("Measure", self.y_combo), ("Breakdown", self.hue_combo),
+        for lbl, w in (("Chart", self.type_combo), ("Labels (x)", self.x_combo),
+                       ("Values (y)", self.y_combo), ("Split by", self.hue_combo),
                        ("Top", self.topn)):
             cap = QLabel(lbl)
             cap.setStyleSheet(f"color:{self.theme['muted']}; font-size:11px;")
@@ -127,7 +144,9 @@ class ChartWindow(QDialog):
             controls.addWidget(w)
         controls.addWidget(self.sort_desc)
         controls.addStretch(1)
-        root.addLayout(controls)
+        root.addWidget(self.controls_box)
+        self.controls_box.setVisible(False)
+        self.customize_btn.toggled.connect(self.controls_box.setVisible)
 
         self.fig = Figure(figsize=(6.5, 4.2))
         self.canvas = FigureCanvasQTAgg(self.fig)
@@ -179,7 +198,10 @@ class ChartWindow(QDialog):
     def _replot(self) -> None:
         self._annot = None
         self._stop_anim()
-        charting.render(self.fig, self.df, self._spec(), self.theme,
+        spec = self._spec()
+        if getattr(self, "desc_label", None) is not None:
+            self.desc_label.setText(charting.describe_spec(spec))
+        charting.render(self.fig, self.df, spec, self.theme,
                         title=self._title)
         # Animate only the first visible paint; every later re-plot (a control
         # change) draws instantly so the window stays steady.

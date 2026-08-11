@@ -1655,7 +1655,7 @@ class MainWindow(QMainWindow):
                 headers, rows, theme=self.current_theme, parent=self,
                 total_rows=total)
             self._chart_windows.append(win)   # same list keeps it alive
-            win.show()
+            win.showMaximized()               # open full-size so big tables are readable
             win.raise_()
         except Exception as exc:  # never let it break the chat
             self.status.showMessage(f"Could not open table: {exc}", 6000)
