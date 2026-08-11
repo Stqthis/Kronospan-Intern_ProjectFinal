@@ -107,6 +107,11 @@ QUERY_MAX_RESULT_ROWS = 100
 # stays small. The HTML goes to the UI, which has a scrollable TableWindow and
 # can hold far more. Two consumers, two caps.
 QUERY_MAX_TABLE_ROWS = int(os.environ.get("RAG_MAX_TABLE_ROWS", "2000"))
+# Condense a result table before display: lift columns that hold the same value
+# in every row into a one-line caption, and collapse exact-duplicate rows into
+# one with a count. Turns a 2000x7 table that is mostly repetition into the few
+# rows and columns that actually vary. Set RAG_CONDENSE_TABLES=0 to disable.
+CONDENSE_TABLES = os.environ.get("RAG_CONDENSE_TABLES", "1") == "1"
 CATEGORICAL_MAX_UNIQUE = 200
 ANALYSIS_MAX_RETRIES = 2
 
@@ -117,6 +122,14 @@ DATA_DIR = os.environ.get(
     "RAG_DATA_DIR", os.path.join(os.path.expanduser("~"), ".offline_rag_assistant")
 )
 INDEX_DIR = os.path.join(DATA_DIR, "index")
+# Version of the INGESTION/PARSING pipeline that produced a persisted index.
+# Parsed tables live in the index (tables.pkl) and are loaded instead of being
+# re-parsed, so a fix to ingestion has NO effect on an already-built index until
+# it is rebuilt. Bump this whenever the parsing/typing/number-format logic
+# changes: load_persisted compares it to the stamp saved with the index and
+# flags a mismatch so the app can prompt a rebuild (see `reindex`). Date-tagged
+# so the ordering is obvious at a glance.
+PIPELINE_VERSION = os.environ.get("RAG_PIPELINE_VERSION", "2026.02.10-numloc")
 # Persist solved query plans across restarts: a repeated/reworded question is
 # then answered with zero model calls. Keyed by (index version, question).
 PLAN_CACHE_PERSIST = os.environ.get("RAG_PLAN_CACHE_PERSIST", "1") == "1"

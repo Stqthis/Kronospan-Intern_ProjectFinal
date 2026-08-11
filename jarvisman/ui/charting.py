@@ -82,6 +82,13 @@ def frame_from_table(headers: list[str], rows: list[list[str]]) -> pd.DataFrame:
     return df
 
 
+def _looks_like_id(name: str) -> bool:
+    n = str(name).strip().lower()
+    return (n in ("id", "code", "index", "no", "no.", "ref", "key")
+            or n.endswith("_id") or n.endswith(" id") or n.endswith("code")
+            or n.endswith(" no") or n.endswith("_no"))
+
+
 def infer_roles(df: pd.DataFrame) -> tuple[list[str], list[str]]:
     """Return (categorical_columns, numeric_columns)."""
     numeric, categorical = [], []
@@ -91,6 +98,56 @@ def infer_roles(df: pd.DataFrame) -> tuple[list[str], list[str]]:
         else:
             categorical.append(str(c))
     return categorical, numeric
+
+
+def _is_timelike(df: pd.DataFrame, col: str) -> bool:
+    if pd.api.types.is_datetime64_any_dtype(df[col]):
+        return True
+    n = str(col).lower()
+    return any(k in n for k in ("date", "month", "year", "quarter", "period"))
+
+
+def _best_x(df: pd.DataFrame, cats: list, nums: list) -> Optional[str]:
+    """Pick the label axis a human would: prefer a time column; otherwise the
+    categorical with a sensible number of distinct values (2..40), skipping
+    ID-like and all-unique columns. Falls back to the first categorical."""
+    n = len(df)
+    # a time column wins (line chart over time reads naturally)
+    for c in list(cats) + list(nums):
+        if _is_timelike(df, c) and df[c].nunique(dropna=False) > 1:
+            return str(c)
+    scored = []
+    for c in cats:
+        if _looks_like_id(c):
+            continue
+        u = df[c].nunique(dropna=False)
+        if u <= 1 or u == n:          # constant or unique-per-row -> useless axis
+            continue
+        # closeness to an ideal ~12 distinct categories
+        scored.append((abs(u - 12), str(c)))
+    if scored:
+        return sorted(scored)[0][1]
+    return cats[0] if cats else None
+
+
+def _best_y(df: pd.DataFrame, nums: list, x: Optional[str]) -> list:
+    """Pick the measure: a numeric column that actually varies and isn't an
+    ID/year, preferring the one with the widest spread of values."""
+    best, best_score = None, -1.0
+    for c in nums:
+        if c == x or _looks_like_id(c) or _is_timelike(df, c):
+            continue
+        s = pd.to_numeric(df[c], errors="coerce").dropna()
+        if s.empty or s.nunique() <= 1:
+            continue
+        score = float(s.abs().sum())      # bias toward real magnitude measures
+        if score > best_score:
+            best, best_score = str(c), score
+    if best:
+        return [best]
+    # fall back to any numeric that isn't the axis
+    rest = [c for c in nums if c != x]
+    return rest[:1]
 
 
 # --------------------------------------------------------------------------- #
@@ -109,13 +166,44 @@ class ChartSpec:
 
 def default_spec(df: pd.DataFrame, top_n: int = 20,
                  value_labels: bool = True) -> ChartSpec:
-    """First categorical as axis, first numeric as measure, bar by default."""
+    """Auto-pick a chart a non-expert would consider correct: a sensible label
+    axis, a real measure, and a chart type that fits the shape of the data."""
     cats, nums = infer_roles(df)
-    x = cats[0] if cats else None
-    y = nums[:1] if nums else []
-    ctype = "bar" if x is not None else "line"
+    x = _best_x(df, cats, nums)
+    y = _best_y(df, nums, x)
+    # choose a chart type from the data shape
+    if x is not None and _is_timelike(df, x):
+        ctype = "line"                       # a measure over time
+    elif x is None:
+        ctype = "line"                       # nothing categorical to group by
+    else:
+        distinct = df[x].nunique(dropna=False)
+        if len(y) == 1 and 3 <= distinct <= 4:
+            ctype = "pie"                    # a few parts of a whole
+        elif distinct > 12:
+            ctype = "barh"                   # many labels -> horizontal, readable
+        else:
+            ctype = "bar"
     return ChartSpec(chart_type=ctype, x=x, y=y, top_n=top_n,
                      value_labels=value_labels)
+
+
+def describe_spec(spec: ChartSpec) -> str:
+    """A plain-language, non-technical sentence describing what the chart shows,
+    so the user never has to reason about 'x' and 'y'."""
+    kind = {"bar": "bar chart", "barh": "horizontal bar chart", "line": "line chart",
+            "area": "area chart", "pie": "pie chart",
+            "scatter": "scatter plot"}.get(spec.chart_type, "chart")
+    measure = spec.y[0] if spec.y else "value"
+    if spec.chart_type == "scatter":
+        return f"Showing {measure} against {spec.x} as a {kind}."
+    if spec.x is None:
+        return f"Showing {measure} as a {kind}."
+    lead = "trend of" if spec.chart_type == "line" else "total"
+    by = f" for each {spec.x}"
+    if spec.hue:
+        by += f", split by {spec.hue}"
+    return f"Showing the {lead} {measure}{by} as a {kind}."
 
 
 # --------------------------------------------------------------------------- #
@@ -161,6 +249,16 @@ def _top_n(frame: pd.DataFrame, x: str, y: str, n: int, desc: bool):
 
 
 def _label_bars(ax, bars, theme, horizontal=False):
+    # Value labels only help when they fit. With many entities the bars get
+    # narrow and adjacent numbers collide, so above a threshold we drop the
+    # labels entirely (the axis still shows magnitude) rather than print an
+    # unreadable pile of overlapping text. Vertical bars crowd much sooner than
+    # horizontal ones, where labels stack down the side.
+    real = [b for b in bars if (b.get_width() if horizontal
+                                else b.get_height()) not in (None,)]
+    limit = 30 if horizontal else 10
+    if len(real) > limit:
+        return
     for b in bars:
         v = b.get_width() if horizontal else b.get_height()
         if v is None or v != v:

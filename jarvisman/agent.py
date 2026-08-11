@@ -94,7 +94,34 @@ def _sanitize_code(code: str) -> str:
             # a bare read call with no assignment is simply dropped
             continue
         kept.append(ln)
-    return "\n".join(kept)
+    out = "\n".join(kept)
+    return _salvage_trailing_prose(out)
+
+
+def _salvage_trailing_prose(code: str) -> str:
+    """Models sometimes append an explanation after the code (e.g. 'This returns
+    the total...'), which lands inside the block and makes it unparseable partway
+    down. If the code doesn't parse, drop trailing lines one at a time until it
+    does -- but never discard a line that assigns `result`, so the answer is
+    preserved. If trimming can't produce valid code, return it unchanged and let
+    the normal syntax-error path handle it."""
+    try:
+        ast.parse(code)
+        return code
+    except SyntaxError:
+        pass
+    lines = code.splitlines()
+    for cut in range(len(lines) - 1, 0, -1):
+        tail = "\n".join(lines[cut:])
+        if re.search(r"(?m)^\s*result\s*=", tail):
+            break                      # would throw away the answer -> stop
+        head = "\n".join(lines[:cut])
+        try:
+            ast.parse(head)
+            return head
+        except SyntaxError:
+            continue
+    return code
 
 
 def _norm_map(tables: dict) -> dict:
@@ -1183,8 +1210,10 @@ class Agent:
         # "total: 0.00 eur" style
         if re.fullmatch(r"(total|sum|result)?:?\s*0(\.0+)?\s*[a-z]{0,4}", blob):
             return True
-        # An empty DataFrame string representation.
+        # An empty DataFrame string representation, or the friendly no-rows line.
         if "empty dataframe" in blob or "columns: []" in blob:
+            return True
+        if "no matching rows" in blob:
             return True
         return False
 
@@ -1351,6 +1380,24 @@ class Agent:
                     continue
                 break
             raw_err = result.get("error") or ""
+            # A syntax error (or a bare "did not return runnable code") won't be
+            # helped by column or spelling repair -- the code never parsed. Give
+            # the model the exact failure and demand a clean, prose-free block,
+            # which is what it actually needs to correct itself.
+            if ("syntax error" in raw_err.lower()
+                    or "did not return runnable code" in raw_err.lower()) \
+                    and attempt < attempts - 1:
+                error = (
+                    f"Your previous response was NOT valid Python and could not "
+                    f"be parsed ({raw_err}). Return ONLY a single Python code "
+                    "block that parses cleanly on its own: no sentences or "
+                    "explanation before or after the code, nothing outside the "
+                    "```python fence, no unfinished lines and no unbalanced "
+                    "brackets or quotes. Use the provided `df`/`dfs` and assign "
+                    "the final answer to `result`."
+                )
+                prev_code = code or prev_code
+                continue
             # deterministic spelling rescue on the ERROR path too: a wrong
             # free-typed literal ('Koutouvas Athanasios') may sit alongside a
             # fixable error; rewriting it to the stored value and re-running
